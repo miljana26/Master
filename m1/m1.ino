@@ -1,28 +1,30 @@
 #include <WiFi.h>
+#include <WebServer.h>  // Uvezi pravu biblioteku
 
 const char *ssid = "MS";
 const char *password = "zastomezezas";
 
-// Login credentials
-const String username = "admin";
-const String userPassword = "admin";
+// Struktura za login kredencijale
+struct User {
+  String username;
+  String password;
+};
 
-NetworkServer server(80);
+// Lista korisnika
+std::vector<User> users = { {"admin", "admin"} };  // Predefinisan admin korisnik
 
-bool loggedIn = false;  // Variable to track login status
+WebServer server(80);  // Kreiraj WebServer objekat
+bool loggedIn = false;
+User loggedInUser = {"", ""};  // Trenutno prijavljeni korisnik
 
 void setup() {
   Serial.begin(115200);
-  pinMode(2, OUTPUT);  // set the LED pin mode
+  pinMode(2, OUTPUT);  // LED pin
 
-  delay(10);
-
-  // Connect to WiFi network
-  Serial.println();
+  // Povezivanje na WiFi mrežu
   Serial.println();
   Serial.print("Connecting to ");
   Serial.println(ssid);
-
   WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -36,108 +38,130 @@ void setup() {
   Serial.println(WiFi.localIP());
 
   server.begin();
+
+  // Handleri za različite URL-ove
+  server.on("/", handleRoot);
+  server.on("/login", HTTP_POST, handleLogin);
+  server.on("/logout", HTTP_GET, handleLogout);
 }
 
 void loop() {
-  NetworkClient client = server.accept();  // listen for incoming clients
+  server.handleClient();  // Obrada HTTP zahteva
+}
 
-  if (client) {                     // if you get a client,
-    Serial.println("New Client.");  // print a message out the serial port
-    String currentLine = "";        // make a String to hold incoming data from the client
-    while (client.connected()) {    // loop while the client's connected
-      if (client.available()) {     // if there's bytes to read from the client,
-        char c = client.read();     // read a byte, then
-        Serial.write(c);            // print it out the serial monitor
-        if (c == '\n') {            // if the byte is a newline character
+void handleRoot() {
+  if (!loggedIn) {
+    showLoginPage();
+  } else if (loggedInUser.username == "admin") {
+    showAdminPage();
+  } else {
+    showUserPage();
+  }
+}
 
-          // if the current line is blank, you got two newline characters in a row.
-          // that's the end of the client HTTP request, so send a response:
-          if (currentLine.length() == 0) {
-            // Send login page if not logged in
-            if (!loggedIn) {
-              client.println("HTTP/1.1 200 OK");
-              client.println("Content-type:text/html");
-              client.println();
-              client.print("<html>");
-              client.print("<head>");
-              client.print("<style>");
-              client.print("body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; margin: 0; padding: 0; }");
-              client.print(".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }");
-              client.print(".login-box { background-color: #1A4D8A; border-radius: 10px; padding: 40px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); }");
-              client.print(".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; }");
-              client.print(".login-box input { width: 100%; padding: 10px; margin: 10px 0; border: none; border-radius: 5px; }");
-              client.print(".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }");
-              client.print(".login-box input[type='submit'] { background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; }");
-              client.print(".login-box input[type='submit']:hover { background-color: #00a3cc; }");
-              client.print("</style>");
-              client.print("</head>");
-              client.print("<body>");
-              client.print("<div class='login-container'>");
-              client.print("<div class='login-box'>");
-              client.print("<h1>Login</h1>");
-              client.print("<form action=\"/login\" method=\"GET\">");
-              client.print("Username: <input type=\"text\" name=\"username\"><br>");
-              client.print("Password: <input type=\"password\" name=\"password\"><br>");
-              client.print("<input type=\"submit\" value=\"Login\">");
-              client.print("</form>");
-              client.print("</div>");
-              client.print("</div>");
-              client.print("</body>");
-              client.print("</html>");
-              client.println();
-            } 
-            // Send control page if logged in
-            else {
-              client.println("HTTP/1.1 200 OK");
-              client.println("Content-type:text/html");
-              client.println();
-              client.print("<html>");
-              client.print("<head>");
-              client.print("<style>");
-              client.print("body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; margin: 0; padding: 0; text-align: center; color: white; }");
-              client.print("</style>");
-              client.print("</head>");
-              client.print("<body>");
-              client.print("Click <a href=\"/H\">here</a> to turn the LED on.<br>");
-              client.print("Click <a href=\"/L\">here</a> to turn the LED off.<br>");
-              client.print("</body>");
-              client.print("</html>");
-              client.println();
-            }
+// Funkcija za prikaz login stranice (sa POST metodom)
+void showLoginPage() {
+  server.send(200, "text/html",
+  "<html><head>"
+  "<style>"
+  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; }"
+  ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
+  ".login-box { background-color: #1A4D8A; padding: 40px; border-radius: 10px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); }"
+  ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; }"
+  ".login-box input { width: 100%; padding: 10px; margin: 10px 0; border: none; border-radius: 5px; }"
+  ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+  ".login-box input[type='submit'] { background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; }"
+  ".login-box input[type='submit']:hover { background-color: #00a3cc; }"
+  "</style></head><body>"
+  "<div class='login-container'><div class='login-box'>"
+  "<h1>Login</h1><form action='/login' method='POST'>"  // Promenjeno na POST
+  "Username: <input type='text' name='username'><br>"
+  "Password: <input type='password' name='password'><br>"
+  "<input type='submit' value='Login'>"
+  "</form></div></div></body></html>");
+}
 
-            break;
-          } else {
-            currentLine = "";
-          }
-        } else if (c != '\r') {
-          currentLine += c;
+// Funkcija za obradu logovanja
+void handleLogin() {
+  if (server.hasArg("username") && server.hasArg("password")) {
+    String enteredUsername = server.arg("username");
+    String enteredPassword = server.arg("password");
+
+    // Debug login podaci
+    Serial.print("Pokušaj logina sa korisnikom: ");
+    Serial.println(enteredUsername);
+    Serial.print("Pokušaj lozinke: ");
+    Serial.println(enteredPassword);
+
+    // Provera kredencijala
+    bool userExists = false;
+    for (User &u : users) {
+      if (u.username == enteredUsername) {
+        userExists = true;
+        if (u.password == enteredPassword) {
+          loggedIn = true;
+          loggedInUser = u;
+          break;
         }
-
-        // Handle login request
-        if (currentLine.indexOf("GET /login?username=") >= 0) {
-          int userIndex = currentLine.indexOf("username=");
-          int passIndex = currentLine.indexOf("password=");
-          String enteredUsername = currentLine.substring(userIndex + 9, currentLine.indexOf("&", userIndex));
-          String enteredPassword = currentLine.substring(passIndex + 9);
-
-          if (enteredUsername == username && enteredPassword == userPassword) {
-            loggedIn = true;
-          }
-        }
-
-        // Handle LED control after login
-        if (loggedIn) {
-          if (currentLine.endsWith("GET /H")) {
-            digitalWrite(2, HIGH);  //LED on
-          }
-          if (currentLine.endsWith("GET /L")) {
-            digitalWrite(2, LOW);  //LED off
-          }
-        }
+        break;
       }
     }
-    // close the connection:
-    client.stop();
-    Serial.println("Client Disconnected.");
+
+    // Kreiranje novog korisnika ako ne postoji
+    if (!userExists && !enteredUsername.isEmpty() && !enteredPassword.isEmpty()) {
+      User newUser = {enteredUsername, enteredPassword};
+      users.push_back(newUser);
+      loggedIn = true;
+      loggedInUser = newUser;
+    }
+
+    // Prikaz stranice na osnovu stanja prijave
+    if (loggedIn) {
+      if (loggedInUser.username == "admin") {
+        showAdminPage();
+      } else {
+        showUserPage();
+      }
+    } else {
+      server.send(200, "text/html", "<html><body><h1>Invalid login. Please try again.</h1></body></html>");
+    }
   }
+}
+
+// Funkcija za prikaz korisničke stranice
+void showUserPage() {
+  server.send(200, "text/html",
+  "<html><body>"
+  "Click <a href=\"/H\">here</a> to turn the LED on.<br>"
+  "Click <a href=\"/L\">here</a> to turn the LED off.<br>"
+  "</body></html>");
+}
+
+// Funkcija za prikaz admin panela (prikaz admina bez opcije brisanja)
+void showAdminPage() {
+  String page = "<html><head><style>body { background-color: #0399FA; font-family: Arial; }"
+                "table { width: 100%; border-collapse: collapse; }"
+                "th, td { padding: 10px; border: 1px solid black; }"
+                "</style></head><body><h1>Admin Panel</h1>"
+                "<table><tr><th>Username</th><th>Action</th></tr>";
+
+  // Loop kroz sve korisnike
+  for (User &user : users) {
+    page += "<tr><td>" + user.username + "</td>";
+    if (user.username != "admin") {
+      page += "<td><a href='/delete?username=" + user.username + "'>Delete</a></td></tr>";
+    } else {
+      page += "<td>Admin</td></tr>";
+    }
+  }
+
+  page += "</table><br><a href='/logout'><button>Logout</button></a></body></html>";
+  server.send(200, "text/html", page);
+}
+
+// Funkcija za odjavu korisnika
+void handleLogout() {
+  loggedIn = false;
+  loggedInUser = {"", ""};  // Resetovanje stanja prijave
+  showLoginPage();
 }
