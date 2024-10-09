@@ -128,10 +128,10 @@ void loop() {
         // Handle LED control after login
         if (loggedIn) {
           if (currentLine.endsWith("GET /H")) {
-            digitalWrite(2, HIGH);  // GET /H turns the LED on
+            digitalWrite(2, HIGH);  //LED on
           }
           if (currentLine.endsWith("GET /L")) {
-            digitalWrite(2, LOW);  // GET /L turns the LED off
+            digitalWrite(2, LOW);  //LED off
           }
         }
       }
