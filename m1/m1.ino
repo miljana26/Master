@@ -190,58 +190,74 @@ void showLoginPage() {
 
 // Funkcija za prikaz dodavanja korisnika
 void showAddUserPage() {
-  String message = "";
-  if (userAdded) {
-    message = "<p style='color:green; text-align:center;'>User added successfully!</p>";
-    userAdded = false;  // Resetuj status dodavanja nakon prikaza poruke
-  }
+    String message = "";
+    if (userAdded) {
+        message = "<p style='color:green; text-align:center;'>User added successfully!</p>";
+        userAdded = false;  // Resetuj status dodavanja nakon prikaza poruke
+    }
 
-  server.send(200, "text/html",
-  "<html><head>"
-  "<style>"
-  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-  ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-  ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
-  ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
-  ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-  ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
-  ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
-  ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-  "</style>"
-  "<script>"
-  "function validateForm() {"
-  "  var username = document.querySelector('input[name=\"username\"]').value;"
-  "  var password = document.querySelector('input[name=\"password\"]').value;"
-  "  var confirmPassword = document.querySelector('input[name=\"confirmPassword\"]').value;"
-  "  if (!validateUsername(username)) {"
-  "    alert('Username must start with a letter and contain only letters and numbers.');"
-  "    return false;"
-  "  }"
-  "  if (!validatePassword(password)) {"
-  "    alert('Password must be longer than 6 characters and contain at least one lowercase letter, one uppercase letter, and one number.');"
-  "    return false;"
-  "  }"
-  "  if (password !== confirmPassword) {"
-  "    alert('Passwords do not match.');"
-  "    return false;"
-  "  }"
-  "  return true;"
-  "}"
-  "</script>"
-  "</head><body>"
-  "<div class='login-container'>"
-  "<div class='login-box'>"
-  "<h1>Add User</h1>"
-  "<form action='/addUser' method='POST' onsubmit='return validateForm()'>"
-  "Username: <input type='text' name='username'><br>"
-  "Password: <input type='password' name='password'><br>"
-  "Confirm Password: <input type='password' name='confirmPassword'><br>"
-  "<input type='submit' value='Add User'>"
-  "</form>"
-  "<a href='/' class='back-button'>Back to Main Page</a>"
-  + message +
-  "</div></div></body></html>");
+    server.send(200, "text/html",
+    "<html><head>"
+    "<style>"
+    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+    ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
+    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
+    ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
+    ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
+    ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+    ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
+    ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
+    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; }"
+    ".form-container { display: flex; justify-content: space-between; }"
+    ".rules-header { font-size: 18px; font-weight: bold; margin-bottom: 10px; font-family: 'Georgia', serif; }"
+    ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; }"
+    "</style>"
+    "<script>"
+    "function validateForm() {"
+    "  var username = document.querySelector('input[name=\"username\"]').value;"
+    "  var password = document.querySelector('input[name=\"password\"]').value;"
+    "  if (!validateUsername(username)) {"
+    "    alert('Username must start with a letter and contain only letters and numbers.');"
+    "    return false;"
+    "  }"
+    "  if (!validatePassword(password)) {"
+    "    alert('Password must be longer than 6 characters and contain at least one lowercase letter, one uppercase letter, and one number.');"
+    "    return false;"
+    "  }"
+    "  return true;"
+    "}"
+    "function validateUsername(username) {"
+    "  var regex = /^[a-zA-Z][a-zA-Z0-9]*$/;"
+    "  return regex.test(username);"
+    "}"
+    "function validatePassword(password) {"
+    "  if (password.length <= 6) return false;"
+    "  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) return false;"
+    "  return true;"
+    "}"
+    "</script>"
+    "</head><body>"
+    "<div class='login-container'>"
+    "<div class='form-container'>"
+    "<div class='login-box'>"
+    "<h1>Add User</h1>"
+    "<form action='/addUser' method='POST' onsubmit='return validateForm()'>"
+    "Username: <input type='text' name='username'><br>"
+    "Password: <input type='password' name='password'><br>"
+    "<input type='submit' value='Add User'>"
+    "</form>"
+    "<a href='/' class='back-button'>Back to Main Page</a>"
+    + message +
+    "</div>"
+    "<div class='bubble'>"
+    "<p class='rules-header'>Username rules:</p>"
+    "<p class='rules-text'>- Must not start with a number<br>- No symbols allowed<br>- Only letters and numbers are valid</p>"
+    "<p class='rules-header'>Password rules:</p>"
+    "<p class='rules-text'>- At least one uppercase letter<br>- At least one lowercase letter<br>- At least one number<br>- Longer than 6 characters</p>"
+    "</div>"
+    "</div></div></body></html>");
 }
+
 
 // Funkcija za obradu logovanja
 void handleLogin() {
@@ -382,6 +398,21 @@ void handleLEDOff() {
 
 // Funkcija za prikaz korisničke stranice
 void showUserPage() {
+  if (!loggedIn) {
+    // Ako korisnik nije prijavljen, preusmeri ga na login
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
+    server.send(200, "text/html",
+    "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+    return;
+  }
+
+  // Prikaz korisničke stranice
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
+
   server.send(200, "text/html",
   "<html><body>"
   "<h2>LED Control</h2>"
@@ -391,8 +422,24 @@ void showUserPage() {
   "</body></html>");
 }
 
+
 // Funkcija za prikaz admin panela
 void showAdminPage() {
+  if (!loggedIn || loggedInUser.username != "admin") {
+    // Ako korisnik nije prijavljen ili nije admin, preusmeri ga na login
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
+    server.send(200, "text/html",
+    "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+    return;
+  }
+
+  // Prikaz admin stranice ako je prijavljen kao admin
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
+
   String page = "<html><head><style>"
                 "body { background-color: #0399FA; font-family: Arial; }"
                 ".container { display: flex; justify-content: center; align-items: center; flex-direction: column; height: 100vh; }"
@@ -423,9 +470,17 @@ void showAdminPage() {
   server.send(200, "text/html", page);
 }
 
+
 // Funkcija za odjavu korisnika
 void handleLogout() {
   loggedIn = false;
   loggedInUser = {"", ""};  // Resetovanje stanja prijave
+
+  // Postavljanje header-a da se onemogući keširanje
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
+
+  // Preusmeravanje na glavnu stranicu
   showMainPage();
 }
