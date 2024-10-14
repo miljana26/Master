@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <WebServer.h>
+#include <SPIFFS.h>
 
 const char *ssid = "MS";
 const char *password = "zastomezezas";
@@ -11,7 +12,7 @@ struct User {
 };
 
 // Lista korisnika
-std::vector<User> users = { {"admin", "admin"} };  // Predefinisan admin korisnik
+std::vector<User> users;  // Lista korisnika se sada puni iz SPIFFS fajla
 
 WebServer server(80);  // Kreiraj WebServer objekat
 bool loggedIn = false;
@@ -20,11 +21,24 @@ User loggedInUser = {"", ""};  // Trenutno prijavljeni korisnik
 
 void setup() {
   Serial.begin(115200);
+
+  // Inicijalizacija SPIFFS
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Greška pri montiranju SPIFFS");
+    return;
+  }
+
+  // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
+  initializeUserFile();
+
+  // Učitavanje korisnika iz fajla pri pokretanju
+  loadUsersFromFile();
+
   pinMode(2, OUTPUT);  // LED pin
 
   // Povezivanje na WiFi mrežu
   Serial.println();
-  Serial.print("Connecting to ");
+  Serial.print("Povezivanje na ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
 
@@ -34,14 +48,16 @@ void setup() {
   }
 
   Serial.println("");
-  Serial.println("WiFi connected.");
-  Serial.println("IP address: ");
+  Serial.println("WiFi povezan.");
+  Serial.println("IP adresa: ");
   Serial.println(WiFi.localIP());
 
   server.begin();
 
   // Handleri za različite URL-ove
-  server.on("/", handleRoot);
+  server.on("/", showMainPage);  // Glavni prozor sa dugmadima
+  server.on("/loginPage", showLoginPage);  // Login prozor
+  server.on("/addUserPage", showAddUserPage);  // Dodavanje korisnika
   server.on("/login", HTTP_POST, handleLogin);
   server.on("/addUser", HTTP_POST, handleAddUser);
   server.on("/delete", HTTP_GET, handleUserDeletion);
@@ -54,83 +70,175 @@ void loop() {
   server.handleClient();  // Obrada HTTP zahteva
 }
 
-void handleRoot() {
-  if (!loggedIn) {
-    showLoginPage();
-  } else if (loggedInUser.username == "admin") {
-    showAdminPage();
-  } else {
-    showUserPage();
+// Funkcija za inicijalizaciju fajla sa korisnicima
+void initializeUserFile() {
+  if (!SPIFFS.exists("/users.txt")) {
+    File file = SPIFFS.open("/users.txt", "w");  // Kreiraj fajl ako ne postoji
+    if (!file) {
+      Serial.println("Greška pri kreiranju fajla za korisnike");
+      return;
+    }
+
+    // Dodaj default admin korisnika u fajl
+    file.println("admin,admin");
+    file.close();
+    Serial.println("Kreiran fajl sa default admin korisnikom");
   }
 }
 
-// Funkcija za prikaz login stranice
+// Funkcija za učitavanje korisnika iz fajla
+void loadUsersFromFile() {
+  File file = SPIFFS.open("/users.txt", "r");
+  if (!file) {
+    Serial.println("Neuspešno otvaranje fajla za korisnike");
+    return;
+  }
+
+  users.clear();  // Očisti trenutnu listu korisnika
+
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    line.trim();
+    int separatorIndex = line.indexOf(',');
+    if (separatorIndex > 0) {
+      String username = line.substring(0, separatorIndex);
+      String password = line.substring(separatorIndex + 1);
+      users.push_back({username, password});
+    }
+  }
+
+  file.close();
+}
+
+// Funkcija za dodavanje korisnika u fajl
+void saveUserToFile(const String& username, const String& password) {
+  File file = SPIFFS.open("/users.txt", "a");  // Otvaranje fajla u append modu
+  if (!file) {
+    Serial.println("Neuspešno otvaranje fajla za dodavanje korisnika");
+    return;
+  }
+
+  file.println(username + "," + password);  // Sačuvaj korisnika u formatu "username,password"
+  file.close();
+}
+
+// Funkcija za brisanje korisnika iz fajla
+void deleteUserFromFile(const String& usernameToDelete) {
+  File file = SPIFFS.open("/users_temp.txt", "w");  // Privremeni fajl
+  if (!file) {
+    Serial.println("Neuspešno otvaranje privremenog fajla");
+    return;
+  }
+
+  for (User &u : users) {
+    // Ne dozvoli brisanje admin korisnika
+    if (u.username != usernameToDelete && u.username != "admin") {
+      file.println(u.username + "," + u.password);  // Piši samo korisnike koji nisu obrisani
+    }
+  }
+
+  file.close();
+
+  SPIFFS.remove("/users.txt");  // Izbriši originalni fajl
+  SPIFFS.rename("/users_temp.txt", "/users.txt");  // Preimenuj privremeni fajl u originalni
+}
+
+// Funkcija za prikaz glavnog prozora sa dugmadima
+void showMainPage() {
+  server.send(200, "text/html",
+  "<html><head>"
+  "<style>"
+  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; height: 100vh; margin: 0; display: flex; justify-content: center; align-items: center; }"
+  ".main-container { display: flex; justify-content: center; align-items: center; flex-direction: column; }"
+  ".main-container button { background-color: #00d4ff; color: #ffffff; padding: 20px 40px; margin: 20px; border-radius: 10px; font-size: 20px; border: none; cursor: pointer; width: 300px; }"
+  ".main-container button:hover { background-color: #00a3cc; }"
+  "</style>"
+  "</head><body>"
+  "<div class='main-container'>"
+  "<button onclick=\"location.href='/loginPage'\">Login</button>"
+  "<button onclick=\"location.href='/addUserPage'\">Add User</button>"
+  "</div>"
+  "</body></html>");
+}
+
+// Funkcija za prikaz login prozora
 void showLoginPage() {
+  server.send(200, "text/html",
+  "<html><head>"
+  "<style>"
+  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+  ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
+  ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
+  ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
+  ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
+  ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+  ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
+  ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
+  "</style>"
+  "</head><body>"
+  "<div class='login-container'>"
+  "<div class='login-box'>"
+  "<h1>Login</h1>"
+  "<form action='/login' method='POST'>"
+  "Username: <input type='text' name='username'><br>"
+  "Password: <input type='password' name='password'><br>"
+  "<input type='submit' value='Login'>"
+  "</form>"
+  "<a href='/' class='back-button'>Back to Main Page</a>"
+  "</div></div></body></html>");
+}
+
+// Funkcija za prikaz dodavanja korisnika
+void showAddUserPage() {
   String message = "";
   if (userAdded) {
-    message = "<p style='color:green;'>User added successfully!</p>";
+    message = "<p style='color:green; text-align:center;'>User added successfully!</p>";
     userAdded = false;  // Resetuj status dodavanja nakon prikaza poruke
   }
 
   server.send(200, "text/html",
   "<html><head>"
   "<style>"
-  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; }"
+  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
   ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
   ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
   ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
   ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
   ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
-  ".login-box input[type='submit'], .login-box input[type='button'] { width: 48%; padding: 15px; margin: 10px 1%; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; }"
-  ".login-box input[type='submit']:hover, .login-box input[type='button']:hover { background-color: #00a3cc; }"
-  ".logout-button { background-color: red; color: white; padding: 20px; font-size: 18px; border: none; border-radius: 25px; cursor: pointer; margin-top: 20px; }"
-  ".logout-button:hover { background-color: darkred; }"
+  ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
+  ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
   "</style>"
   "<script>"
-  "function addUser() {"
+  "function validateForm() {"
   "  var username = document.querySelector('input[name=\"username\"]').value;"
   "  var password = document.querySelector('input[name=\"password\"]').value;"
-  "  if (validateUsername(username) && validatePassword(password)) {"
-  "    document.getElementById('newusername').value = username;"
-  "    document.getElementById('newpassword').value = password;"
-  "    document.getElementById('adduser').submit();"
-  "  }"
-  "}"
-  "function validateUsername(username) {"
-  "  var regex = /^[a-zA-Z][a-zA-Z0-9]*$/;"
-  "  if (!regex.test(username)) {"
+  "  var confirmPassword = document.querySelector('input[name=\"confirmPassword\"]').value;"
+  "  if (!validateUsername(username)) {"
   "    alert('Username must start with a letter and contain only letters and numbers.');"
   "    return false;"
   "  }"
-  "  return true;"
-  "}"
-  "function validatePassword(password) {"
-  "  if (password.length <= 6) {"
-  "    alert('Password must be longer than 6 characters.');"
+  "  if (!validatePassword(password)) {"
+  "    alert('Password must be longer than 6 characters and contain at least one lowercase letter, one uppercase letter, and one number.');"
   "    return false;"
   "  }"
-  "  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) {"
-  "    alert('Password must contain at least one lowercase letter, one uppercase letter, and one number.');"
+  "  if (password !== confirmPassword) {"
+  "    alert('Passwords do not match.');"
   "    return false;"
   "  }"
   "  return true;"
   "}"
   "</script>"
   "</head><body>"
-  "<div class='login-container'><div class='login-box'>"
-  "<h1>Login</h1>"
-  "<form action='/login' method='POST'>"
+  "<div class='login-container'>"
+  "<div class='login-box'>"
+  "<h1>Add User</h1>"
+  "<form action='/addUser' method='POST' onsubmit='return validateForm()'>"
   "Username: <input type='text' name='username'><br>"
   "Password: <input type='password' name='password'><br>"
-  "<div style='display: flex; justify-content: space-between;'>"
-  "<input type='button' value='Add User' onclick=\"addUser();\">"
-  "<input type='submit' value='Login'>"
-  "</div>"
+  "Confirm Password: <input type='password' name='confirmPassword'><br>"
+  "<input type='submit' value='Add User'>"
   "</form>"
-  "<form id='adduser' action='/addUser' method='POST' style='display:none;'>"
-  "<input type='hidden' name='username' id='newusername'>"
-  "<input type='hidden' name='password' id='newpassword'>"
-  "</form>"
+  "<a href='/' class='back-button'>Back to Main Page</a>"
   + message +
   "</div></div></body></html>");
 }
@@ -142,26 +250,27 @@ void handleLogin() {
     String enteredPassword = server.arg("password");
 
     bool userExists = false;
+    bool passwordCorrect = false;
+
     for (User &u : users) {
       if (u.username == enteredUsername) {
         userExists = true;
         if (u.password == enteredPassword) {
+          passwordCorrect = true;
           loggedIn = true;
           loggedInUser = u;
           break;
         }
-        break;
       }
     }
 
-    if (!userExists) {
+    if (!userExists || !passwordCorrect) {
       server.send(200, "text/html",
       "<html><body>"
-      "<div style='text-align: center;'>"
-      "<h2 style='color: red;'>Wrong username or password</h2>"
-      "<p>Returning to login...</p>"
-      "</div>"
-      "<meta http-equiv='refresh' content='3;url=/' />"
+      "<script>"
+      "alert('Wrong username or password!');"
+      "window.location.href = '/loginPage';"
+      "</script>"
       "</body></html>");
     } else {
       if (loggedInUser.username == "admin") {
@@ -187,31 +296,72 @@ void handleAddUser() {
       }
     }
 
-    if (!userExists && !newUsername.isEmpty() && !newPassword.isEmpty()) {
+    if (!userExists && isValidUsername(newUsername) && isValidPassword(newPassword)) {
       User newUser = {newUsername, newPassword};
       users.push_back(newUser);
       userAdded = true;
-      handleRoot();
+
+      // Sačuvaj novog korisnika u fajl
+      saveUserToFile(newUsername, newPassword);
+
+      showAddUserPage();  // Prikaži stranicu nakon dodavanja korisnika
     } else {
       server.send(200, "text/html",
       "<html><body>"
-      "<p>Error: User already exists or invalid input!</p>"
-      "<meta http-equiv='refresh' content='2;url=/' />"
+      "<script>alert('Error: User already exists or invalid input!');</script>"
+      "<meta http-equiv='refresh' content='0;url=/addUserPage' />"
       "</body></html>");
     }
   }
+}
+
+// Funkcija za validaciju username-a
+bool isValidUsername(String username) {
+  if (username.length() == 0) return false;
+  if (!isAlpha(username[0])) return false;
+  for (int i = 0; i < username.length(); i++) {
+    if (!isAlphaNumeric(username[i])) return false;
+  }
+  return true;
+}
+
+// Funkcija za validaciju password-a
+bool isValidPassword(String password) {
+  if (password.length() <= 6) return false;
+  bool hasLower = false, hasUpper = false, hasDigit = false;
+
+  for (int i = 0; i < password.length(); i++) {
+    if (islower(password[i])) hasLower = true;
+    if (isupper(password[i])) hasUpper = true;
+    if (isdigit(password[i])) hasDigit = true;
+  }
+
+  return hasLower && hasUpper && hasDigit;
 }
 
 // Funkcija za brisanje korisnika
 void handleUserDeletion() {
   if (server.hasArg("username")) {
     String usernameToDelete = server.arg("username");
+
+    // Ne dozvoli brisanje admin korisnika
+    if (usernameToDelete == "admin") {
+      server.send(200, "text/html",
+      "<html><body><script>alert('Admin user cannot be deleted!');</script>"
+      "<meta http-equiv='refresh' content='0;url=/' /></body></html>");
+      return;
+    }
+
     for (auto it = users.begin(); it != users.end(); ++it) {
       if (it->username == usernameToDelete) {
         users.erase(it);
         break;
       }
     }
+
+    // Izbriši korisnika iz fajla
+    deleteUserFromFile(usernameToDelete);
+
     showAdminPage();
   }
 }
@@ -277,5 +427,5 @@ void showAdminPage() {
 void handleLogout() {
   loggedIn = false;
   loggedInUser = {"", ""};  // Resetovanje stanja prijave
-  showLoginPage();
+  showMainPage();
 }
