@@ -1,6 +1,14 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <SPIFFS.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1  // Ako OLED koristi reset pin, podesiti ovde
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 const char *ssid = "MS";
 const char *password = "zastomezezas";
@@ -19,6 +27,9 @@ bool loggedIn = false;
 bool userAdded = false;  // Varijabla za status dodavanja korisnika
 User loggedInUser = {"", ""};  // Trenutno prijavljeni korisnik
 
+const int ledPin = 2;    // Pin za LED diodu (GPIO2)
+const int pirPin = 13;   // Pin za PIR senzor (npr. GPIO13)
+
 void setup() {
   Serial.begin(115200);
 
@@ -34,7 +45,21 @@ void setup() {
   // Učitavanje korisnika iz fajla pri pokretanju
   loadUsersFromFile();
 
-  pinMode(2, OUTPUT);  // LED pin
+  pinMode(ledPin, OUTPUT);   // Podešavamo LED pin kao izlaz
+  pinMode(pirPin, INPUT);    // PIR pin kao ulaz
+
+  // Inicijalizacija OLED ekrana
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {  // Adresa OLED ekrana 0x3C
+    Serial.println(F("OLED nije pronađen"));
+    for (;;);  // Beskonačna petlja ako OLED nije pronađen
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);      // Veličina teksta
+  display.setTextColor(SSD1306_WHITE);  // Boja teksta
+  display.setCursor(0, 0);
+  display.print("Waiting");
+  display.display();           // Prikaz na ekranu
 
   // Povezivanje na WiFi mrežu
   Serial.println();
@@ -68,12 +93,39 @@ void setup() {
 
 void loop() {
   server.handleClient();  // Obrada HTTP zahteva
+  detectMotionAndControlLED();  // Provera PIR senzora i kontrola OLED-a
+}
+
+// Funkcija za detekciju pokreta i upravljanje LED-om i OLED-om
+void detectMotionAndControlLED() {
+  int pirState = digitalRead(pirPin);  // Čitamo stanje PIR senzora
+
+  if (pirState == HIGH) {  // Detekcija pokreta
+    Serial.println("Pokret detektovan!");
+    digitalWrite(ledPin, HIGH);  // Uključi LED diodu na GPIO2
+
+    // Prikaz na OLED-u
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Pokret je detektovan");
+    display.display();
+  } else {
+    digitalWrite(ledPin, LOW);  // Isključi LED diodu
+
+    // Prikaži "Waiting" na OLED-u
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Waiting");
+    display.display();
+  }
 }
 
 // Funkcija za inicijalizaciju fajla sa korisnicima
 void initializeUserFile() {
+  // Proveravamo da li postoji fajl
   if (!SPIFFS.exists("/users.txt")) {
-    File file = SPIFFS.open("/users.txt", "w");  // Kreiraj fajl ako ne postoji
+    // Kreiraj fajl ako ne postoji i dodaj admin/admin korisnika
+    File file = SPIFFS.open("/users.txt", "w");
     if (!file) {
       Serial.println("Greška pri kreiranju fajla za korisnike");
       return;
@@ -83,6 +135,27 @@ void initializeUserFile() {
     file.println("admin,admin");
     file.close();
     Serial.println("Kreiran fajl sa default admin korisnikom");
+  } else {
+    // Proveri da li admin korisnik postoji u fajlu
+    bool adminExists = false;
+    File file = SPIFFS.open("/users.txt", "r");
+    while (file.available()) {
+      String line = file.readStringUntil('\n');
+      line.trim();  // Ukloni prazne prostore
+      if (line.startsWith("admin,")) {
+        adminExists = true;
+        break;
+      }
+    }
+    file.close();
+
+    // Ako admin ne postoji, dodaj ga u fajl
+    if (!adminExists) {
+      File file = SPIFFS.open("/users.txt", "a");
+      file.println("admin,admin");
+      file.close();
+      Serial.println("Dodao admin korisnika u postojeći fajl");
+    }
   }
 }
 
@@ -98,11 +171,13 @@ void loadUsersFromFile() {
 
   while (file.available()) {
     String line = file.readStringUntil('\n');
-    line.trim();
+    line.trim();  // Dodaj trim() da ukloni prazne prostore
     int separatorIndex = line.indexOf(',');
     if (separatorIndex > 0) {
       String username = line.substring(0, separatorIndex);
+      username.trim();  // Dodaj trim() nakon substring
       String password = line.substring(separatorIndex + 1);
+      password.trim();  // Dodaj trim() nakon substring
       users.push_back({username, password});
     }
   }
@@ -161,6 +236,7 @@ void showMainPage() {
   "</body></html>");
 }
 
+
 // Funkcija za prikaz login prozora
 void showLoginPage() {
   server.send(200, "text/html",
@@ -207,7 +283,7 @@ void showAddUserPage() {
     ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
     ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
     ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; height: auto; margin-top: 30px; }"
+    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 10px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; height: auto; margin-top: 30px; }"
     ".form-container { display: flex; justify-content: space-between; align-items: center; }"  // Poravnavanje oba prozora
     ".rules-header { font-size: 18px; font-weight: bold; margin-bottom: 10px; font-family: 'Georgia', serif; }"
     ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; text-align: center; }"
@@ -412,19 +488,18 @@ void handleUserDeletion() {
   }
 }
 
-// Funkcija za uključivanje LED-a
+// Funkcija za uključivanje LED-a na GPIO 2
 void handleLEDOn() {
-  digitalWrite(2, HIGH);
-  server.send(200, "text/html",
-  "<html><body><h1>LED is ON</h1><meta http-equiv='refresh' content='1;url=/' /></body></html>");
+  digitalWrite(2, HIGH);  // Uključi LED na GPIO 2
+  showUserPage();  // Vrati korisnika na user page umesto da ga izloguješ
 }
 
-// Funkcija za isključivanje LED-a
+// Funkcija za isključivanje LED-a na GPIO 2
 void handleLEDOff() {
-  digitalWrite(2, LOW);
-  server.send(200, "text/html",
-  "<html><body><h1>LED is OFF</h1><meta http-equiv='refresh' content='1;url=/' /></body></html>");
+  digitalWrite(2, LOW);  // Isključi LED na GPIO 2
+  showUserPage();  // Vrati korisnika na user page umesto da ga izloguješ
 }
+
 
 // Funkcija za prikaz korisničke stranice
 void showUserPage() {
