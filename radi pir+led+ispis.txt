@@ -4,7 +4,6 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <Keypad.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -29,26 +28,7 @@ bool userAdded = false;  // Varijabla za status dodavanja korisnika
 User loggedInUser = {"", ""};  // Trenutno prijavljeni korisnik
 
 const int ledPin = 2;    // Pin za LED diodu (GPIO2)
-const int pirPin = 15;   // Pin za PIR senzor (npr. GPIO22)
-
-// Konfiguracija za matricu tastature (dodato)
-const byte ROWS = 4; // četiri reda
-const byte COLS = 4; // četiri kolone
-
-char keys[ROWS][COLS] = {
-  {'1','2','3','A'},
-  {'4','5','6','B'},
-  {'7','8','9','C'},
-  {'*','0','#','D'}
-};
-
-byte rowPins[ROWS] = {13, 12, 14, 27}; // Kolone povezane na GPIO pinove
-byte colPins[COLS] = {26, 25, 33, 32}; // Redovi povezani na GPIO pinove
-
-
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);  // Inicijalizacija tastature
-
-String enteredPassword = "";  // Globalna promenljiva za unos lozinke
+const int pirPin = 13;   // Pin za PIR senzor (npr. GPIO13)
 
 void setup() {
   Serial.begin(115200);
@@ -78,8 +58,8 @@ void setup() {
   display.setTextSize(1);      // Veličina teksta
   display.setTextColor(SSD1306_WHITE);  // Boja teksta
   display.setCursor(0, 0);
-  display.print("Enter password:");
-  display.display();
+  display.print("Waiting");
+  display.display();           // Prikaz na ekranu
 
   // Povezivanje na WiFi mrežu
   Serial.println();
@@ -114,46 +94,7 @@ void setup() {
 void loop() {
   server.handleClient();  // Obrada HTTP zahteva
   detectMotionAndControlLED();  // Provera PIR senzora i kontrola OLED-a
-  handlePasswordInput();  // Prikazivanje unosa lozinke na OLED-u
 }
-
-// Funkcija za unos lozinke i prikaz na OLED-u
-void handlePasswordInput() {
-  char key = keypad.getKey();  // Čitamo unos sa tastature
-
-  if (key) {
-    if (key == '#') {  // '#' za potvrdu unosa
-      Serial.println("Unos završen: " + enteredPassword);
-      // Očisti unos nakon potvrde
-      enteredPassword = "";
-    } else if (key == '*') {  // '*' za brisanje karaktera
-      if (enteredPassword.length() > 0) {
-        enteredPassword.remove(enteredPassword.length() - 1);
-      }
-    } else {
-      // Dodaj uneseni karakter u lozinku (uključujući A, B, C, D)
-      enteredPassword += key;
-    }
-
-    // Prikaz na OLED-u
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.print("Enter password:");
-
-    // Prikaz zvezdica u drugom redu
-    display.setCursor(0, 20);
-    for (int i = 0; i < enteredPassword.length(); i++) {
-      display.print("*");
-    }
-
-    // Prikaz lozinke u običnom obliku u trećem redu
-    display.setCursor(0, 40);
-    display.print(enteredPassword);
-
-    display.display();
-  }
-}
-
 
 // Funkcija za detekciju pokreta i upravljanje LED-om i OLED-om
 void detectMotionAndControlLED() {
@@ -163,26 +104,21 @@ void detectMotionAndControlLED() {
     Serial.println("Pokret detektovan!");
     digitalWrite(ledPin, HIGH);  // Uključi LED diodu na GPIO2
 
-    // Prikaz na OLED-u samo ako nije u toku unos lozinke
-    if (enteredPassword == "") {
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("Pokret je detektovan");
-      display.display();
-    }
+    // Prikaz na OLED-u
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Pokret je detektovan");
+    display.display();
   } else {
     digitalWrite(ledPin, LOW);  // Isključi LED diodu
 
-    // Prikaži "Waiting" na OLED-u samo ako nema unosa lozinke
-    if (enteredPassword == "") {
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("Waiting");
-      display.display();
-    }
+    // Prikaži "Waiting" na OLED-u
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Waiting");
+    display.display();
   }
 }
-
 
 // Funkcija za inicijalizaciju fajla sa korisnicima
 void initializeUserFile() {

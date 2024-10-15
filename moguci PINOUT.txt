@@ -1,0 +1,12 @@
+Uređaj										Pin na ESP32
+Tastatura -									Redovi (R1, R2, R3, R4)	GPIO 13, 12, 14, 27
+Tastatura - 								Kolone (C1, C2, C3, C4)	GPIO 26, 25, 33, 32
+PIR senzor (OUT)							GPIO 15
+Servo motor									GPIO 4
+Fingerprint Sensor (TX - RX komunikacija)	GPIO 17 (RX2), GPIO 16 (TX2)
+Voice Recognition Sensor (I2C - SDA/SCL)	GPIO 21 (SDA), GPIO 22 (SCL)
+OLED										GPIO 21 (SDA), GPIO 22 (SCL)
+LED kontrola (GPIO za LED)					GPIO 2
+
+
+Ovo omogućava da sve komponente budu ispravno povezane i da ne dođe do sukoba pinova. Proveri samo da su svi UART pinovi ispravno podešeni u softveru za ESP32.
