@@ -207,10 +207,10 @@ void showAddUserPage() {
     ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
     ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
     ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; }"
-    ".form-container { display: flex; justify-content: space-between; }"
+    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; height: auto; margin-top: 30px; }"
+    ".form-container { display: flex; justify-content: space-between; align-items: center; }"  // Poravnavanje oba prozora
     ".rules-header { font-size: 18px; font-weight: bold; margin-bottom: 10px; font-family: 'Georgia', serif; }"
-    ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; }"
+    ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; text-align: center; }"
     "</style>"
     "<script>"
     "function validateForm() {"
@@ -259,6 +259,40 @@ void showAddUserPage() {
 }
 
 
+// Funkcija za prikaz login prozora
+void showLoginPage(String errorMessage = "") {
+  String message = "";
+  if (errorMessage != "") {
+    message = "<p style='color:red; text-align:center; margin-top:20px;'>" + errorMessage + "</p>";
+  }
+
+  server.send(200, "text/html",
+  "<html><head>"
+  "<style>"
+  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+  ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
+  ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
+  ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
+  ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
+  ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+  ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
+  ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
+  "</style>"
+  "</head><body>"
+  "<div class='login-container'>"
+  "<div class='login-box'>"
+  "<h1>Login</h1>"
+  "<form action='/login' method='POST'>"
+  "Username: <input type='text' name='username'><br>"
+  "Password: <input type='password' name='password'><br>"
+  "<input type='submit' value='Login'>"
+  "</form>"
+  "<a href='/' class='back-button'>Back to Main Page</a>"
+  + message +  // Poruka o grešci ispod dugmeta
+  "</div></div></body></html>");
+}
+
+
 // Funkcija za obradu logovanja
 void handleLogin() {
   if (server.hasArg("username") && server.hasArg("password")) {
@@ -281,13 +315,8 @@ void handleLogin() {
     }
 
     if (!userExists || !passwordCorrect) {
-      server.send(200, "text/html",
-      "<html><body>"
-      "<script>"
-      "alert('Wrong username or password!');"
-      "window.location.href = '/loginPage';"
-      "</script>"
-      "</body></html>");
+      // Prikazivanje greške direktno na login stranici
+      showLoginPage("Wrong username or password!");
     } else {
       if (loggedInUser.username == "admin") {
         showAdminPage();
@@ -297,6 +326,7 @@ void handleLogin() {
     }
   }
 }
+
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
