@@ -12,11 +12,6 @@ char keys[ROWS][COLS] = {
 };
 
 // Pokušaj sa izmenom rasporeda pinova
-byte rowPins2[ROWS] = {13, 14, 27, 26}; // Kolone povezane na GPIO pinove
-byte colPins2[COLS] = {25, 33, 32, 22}; // Redovi povezani na GPIO pinove
-
-byte rowPins3[ROWS] = {13, 26, 14, 27}; // Kolone povezane na GPIO pinove
-byte colPins3[COLS] = {32, 25, 33, 22}; // Redovi povezani na GPIO pinove
 
 byte rowPins[ROWS] = {13, 12, 14, 27}; // Kolone povezane na GPIO pinove
 byte colPins[COLS] = {26, 25, 33, 32}; // Redovi povezani na GPIO pinove
