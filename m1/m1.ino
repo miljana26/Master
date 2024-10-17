@@ -5,10 +5,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Keypad.h>
+#include <ESP32Servo.h>  // Biblioteka za kontrolu servoa
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define OLED_RESET -1  // Ako OLED koristi reset pin, podesiti ovde
+#define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 const char *ssid = "MS";
@@ -21,19 +22,25 @@ struct User {
 };
 
 // Lista korisnika
-std::vector<User> users;  // Lista korisnika se sada puni iz SPIFFS fajla
+std::vector<User> users;
 
-WebServer server(80);  // Kreiraj WebServer objekat
+WebServer server(80);
 bool loggedIn = false;
-bool userAdded = false;  // Varijabla za status dodavanja korisnika
-User loggedInUser = {"", ""};  // Trenutno prijavljeni korisnik
+bool userAdded = false;
+User loggedInUser = {"", ""};
 
-const int ledPin = 2;    // Pin za LED diodu (GPIO2)
-const int pirPin = 15;   // Pin za PIR senzor (npr. GPIO22)
+const int ledPin = 5;    
+const int pirPin = 15;  
+bool motionDetected = false;  // Flag za praćenje detekcije pokreta
+const int blueLedPin = 2;  // Pin za plavu LED diodu (GPIO 2)
+int blockTime = 0; // Vreme koje blokira korisnika nakon 3 pogrešna unosa
+bool isEnteringPin = false;  // Prati da li je u toku unos PIN-a
+bool isWaitingForMotion = true;  // Da li sistem čeka na pokret
 
-// Konfiguracija za matricu tastature (dodato)
-const byte ROWS = 4; // četiri reda
-const byte COLS = 4; // četiri kolone
+
+// Keypad setup
+const byte ROWS = 4;
+const byte COLS = 4;
 
 char keys[ROWS][COLS] = {
   {'1','2','3','A'},
@@ -42,13 +49,23 @@ char keys[ROWS][COLS] = {
   {'*','0','#','D'}
 };
 
-byte rowPins[ROWS] = {13, 12, 14, 27}; // Kolone povezane na GPIO pinove
-byte colPins[COLS] = {26, 25, 33, 32}; // Redovi povezani na GPIO pinove
+byte rowPins[ROWS] = {13, 12, 14, 27};
+byte colPins[COLS] = {26, 25, 33, 32};
 
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);  // Inicijalizacija tastature
+String enteredPassword = "";  
+String correctPassword = "123A";  
+int attempts = 0;  
+const int maxAttempts = 3;  
 
-String enteredPassword = "";  // Globalna promenljiva za unos lozinke
+// Servo setup
+Servo myservo;
+int servoPin = 18;
+int pos = 0;
+
+unsigned long pirActivationTime = 0;
+const unsigned long pirTimeout = 180000;  // 3 minuta timeout
 
 void setup() {
   Serial.begin(115200);
@@ -59,128 +76,179 @@ void setup() {
     return;
   }
 
-  // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
-  initializeUserFile();
+  pinMode(ledPin, OUTPUT);      // LED dioda na pinu 5
+  pinMode(blueLedPin, OUTPUT);  // Plava LED dioda na GPIO 2
+  pinMode(pirPin, INPUT);       // PIR senzor
 
-  // Učitavanje korisnika iz fajla pri pokretanju
-  loadUsersFromFile();
-
-  pinMode(ledPin, OUTPUT);   // Podešavamo LED pin kao izlaz
-  pinMode(pirPin, INPUT);    // PIR pin kao ulaz
-
-  // Inicijalizacija OLED ekrana
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {  // Adresa OLED ekrana 0x3C
+ // Inicijalizacija OLED-a
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("OLED nije pronađen"));
-    for (;;);  // Beskonačna petlja ako OLED nije pronađen
+    for (;;);
   }
 
   display.clearDisplay();
-  display.setTextSize(1);      // Veličina teksta
-  display.setTextColor(SSD1306_WHITE);  // Boja teksta
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.print("Enter password:");
+  display.print("Waiting for motion...");
   display.display();
 
-  // Povezivanje na WiFi mrežu
-  Serial.println();
-  Serial.print("Povezivanje na ");
-  Serial.println(ssid);
+  // WiFi konekcija
   WiFi.begin(ssid, password);
-
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
 
-  Serial.println("");
-  Serial.println("WiFi povezan.");
-  Serial.println("IP adresa: ");
+  Serial.println("WiFi povezan. IP adresa: ");
   Serial.println(WiFi.localIP());
 
   server.begin();
 
-  // Handleri za različite URL-ove
-  server.on("/", showMainPage);  // Glavni prozor sa dugmadima
-  server.on("/loginPage", showLoginPage);  // Login prozor
-  server.on("/addUserPage", showAddUserPage);  // Dodavanje korisnika
-  server.on("/login", HTTP_POST, handleLogin);
-  server.on("/addUser", HTTP_POST, handleAddUser);
-  server.on("/delete", HTTP_GET, handleUserDeletion);
-  server.on("/H", HTTP_GET, handleLEDOn);
-  server.on("/L", HTTP_GET, handleLEDOff);
-  server.on("/logout", HTTP_GET, handleLogout);
+  // Servo setup
+  ESP32PWM::allocateTimer(0);
+  myservo.setPeriodHertz(50);  
+  myservo.attach(servoPin, 1000, 2000); 
+
+  // Start server handler
+  server.on("/", showMainPage);  
 }
 
 void loop() {
-  server.handleClient();  // Obrada HTTP zahteva
-  detectMotionAndControlLED();  // Provera PIR senzora i kontrola OLED-a
-  handlePasswordInput();  // Prikazivanje unosa lozinke na OLED-u
+  server.handleClient();  
+  handlePIRSensor();  
+  handlePasswordInput();  
 }
 
-// Funkcija za unos lozinke i prikaz na OLED-u
+
+// Funkcija za unos PIN-a
 void handlePasswordInput() {
-  char key = keypad.getKey();  // Čitamo unos sa tastature
+  if (attempts >= maxAttempts) {
+    // Ako je previše pogrešnih pokušaja, ne dozvoljava dalji unos
+    Serial.println("Unos je blokiran zbog previše pogrešnih pokušaja!");
+    return;
+  }
+
+  char key = keypad.getKey();
 
   if (key) {
-    if (key == '#') {  // '#' za potvrdu unosa
-      Serial.println("Unos završen: " + enteredPassword);
-      // Očisti unos nakon potvrde
-      enteredPassword = "";
-    } else if (key == '*') {  // '*' za brisanje karaktera
+    if (!isEnteringPin) {
+      // Kada korisnik počne da unosi PIN, prebaci sistem u stanje unosa PIN-a
+      isEnteringPin = true;
+      isWaitingForMotion = false;  // Više ne čekamo pokret
+    }
+
+    // Prvo ažuriraj promenljivu `enteredPassword`
+    if (key == '#') {
+      Serial.print("Unos završen: ");
+      Serial.println(enteredPassword);
+      if (enteredPassword == correctPassword) {
+        Serial.println("Ispravan PIN!");
+        displayWelcomeMessage();  // Prikaži poruku "Welcome home!"
+        moveServo();
+        delay(3000);  // Prikaži poruku 3 sekunde pre povratka na "Waiting"
+        resetPIRDetection();  // Resetuj na "Waiting for motion"
+      } else {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          Serial.println("Previše pogrešnih pokušaja!");
+          activateErrorLED();  // Aktiviraj crvenu LED za pogrešne pokušaje
+          blockTime = millis();  // Zabeleži vreme kada je unos blokiran
+          delay(3000);  // Ostaviti vreme da LED svetli
+          resetPIRDetection();  // Resetuj sistem i vrati ga na "Waiting for motion"
+        } else {
+          Serial.println("Neispravan PIN!");
+        }
+      }
+      enteredPassword = "";  
+    } else if (key == '*') {  
       if (enteredPassword.length() > 0) {
         enteredPassword.remove(enteredPassword.length() - 1);
       }
     } else {
-      // Dodaj uneseni karakter u lozinku (uključujući A, B, C, D)
-      enteredPassword += key;
+      enteredPassword += key;  // Dodaj uneseni karakter pre nego što ažuriraš OLED
     }
 
-    // Prikaz na OLED-u
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.print("Enter password:");
-
-    // Prikaz zvezdica u drugom redu
-    display.setCursor(0, 20);
-    for (int i = 0; i < enteredPassword.length(); i++) {
-      display.print("*");
+    // Ažuriraj OLED ekran samo kada je unos u toku
+    if (isEnteringPin) {
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.setTextSize(1);  // Vraća veličinu teksta na standardnu
+      display.print("Enter pin:");
+      display.setCursor(0, 20);
+      for (int i = 0; i < enteredPassword.length(); i++) {
+        display.print("*");
+      }
+      display.display();
     }
-
-    // Prikaz lozinke u običnom obliku u trećem redu
-    display.setCursor(0, 40);
-    display.print(enteredPassword);
-
-    display.display();
   }
 }
 
 
-// Funkcija za detekciju pokreta i upravljanje LED-om i OLED-om
-void detectMotionAndControlLED() {
-  int pirState = digitalRead(pirPin);  // Čitamo stanje PIR senzora
+void resetPIRDetection() {
+  digitalWrite(ledPin, LOW);  
+  digitalWrite(blueLedPin, LOW);  // Isključi plavu LED diodu
+  enteredPassword = "";
+  attempts = 0;
+  isEnteringPin = false;  // Završava unos PIN-a
+  isWaitingForMotion = true;  // Vraća se u stanje čekanja na pokret
+  display.clearDisplay();
+  display.setTextSize(1);  // Vrati veličinu teksta na normalnu
+  display.setCursor(0, 0);
+  display.print("Waiting for motion...");
+  display.display();
+}
 
-  if (pirState == HIGH) {  // Detekcija pokreta
-    Serial.println("Pokret detektovan!");
-    digitalWrite(ledPin, HIGH);  // Uključi LED diodu na GPIO2
+// Funkcija za detekciju pokreta PIR senzora
+void handlePIRSensor() {
+  int pirState = digitalRead(pirPin);
 
-    // Prikaz na OLED-u samo ako nije u toku unos lozinke
-    if (enteredPassword == "") {
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("Pokret je detektovan");
-      display.display();
-    }
-  } else {
-    digitalWrite(ledPin, LOW);  // Isključi LED diodu
-
-    // Prikaži "Waiting" na OLED-u samo ako nema unosa lozinke
-    if (enteredPassword == "") {
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("Waiting");
-      display.display();
-    }
+  if (pirState == HIGH && isWaitingForMotion) {  // Samo ako čeka na pokret
+    Serial.println("Pokret je detektovan!");
+    pirActivationTime = millis();
+    digitalWrite(ledPin, HIGH);  // Aktiviraj LED na pinu 5
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Enter pin:");
+    display.display();
+    isEnteringPin = true;  // Postavi stanje na unos PIN-a
+    isWaitingForMotion = false;  // Više ne čekamo pokret
+  } else if (millis() - pirActivationTime > pirTimeout) {
+    resetPIRDetection();
   }
+}
+
+// Funkcija koja prikazuje poruku "Welcome home!" na OLED-u
+void displayWelcomeMessage() {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.setTextSize(2);  // Povećaj veličinu teksta za "Welcome home"
+  display.print("Welcome");
+  display.setCursor(0, 30);  // Drugi red
+  display.print("home!");
+  display.display();
+}
+
+
+
+// Funkcija za pomeranje servoa
+void moveServo() {
+  for (pos = 0; pos <= 180; pos += 1) {
+    myservo.write(pos);
+    delay(10);
+  }
+  delay(1000);
+  for (pos = 180; pos >= 0; pos -= 1) {
+    myservo.write(pos);
+    delay(10);
+  }
+}
+
+// Aktiviraj plavu LED diodu na ESP32 kada ima previše neispravnih pokušaja
+void activateErrorLED() {
+  digitalWrite(blueLedPin , HIGH);  
+  delay(5000);  
+  digitalWrite(blueLedPin , LOW);
 }
 
 
