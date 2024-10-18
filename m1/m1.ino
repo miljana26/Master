@@ -511,18 +511,16 @@ void showAddUserPage() {
     "<style>"
     "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
     ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
+    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; min-height: 400px; /* Postavljena minimalna visina za login prozor */ }"
     ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
     ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
     ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
     ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
     ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; }"
-    ".form-container { display: flex; justify-content: space-between; }"
-    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; height: auto; margin-top: 30px; }"
-    ".form-container { display: flex; justify-content: space-between; align-items: center; }"  // Poravnavanje oba prozora
+    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; /* Manja širina za bubble */"
+    "font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; text-align: center; min-height: 400px; /* Postavljena minimalna visina da odgovara login prozoru */ margin-left: 30px; }"  // Razmak između login box i bubble
+    ".form-container { display: flex; justify-content: space-between; align-items: center; }"
     ".rules-header { font-size: 18px; font-weight: bold; margin-bottom: 10px; font-family: 'Georgia', serif; }"
-    ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; }"
     ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; text-align: center; }"
     "</style>"
     "<script>"
@@ -538,16 +536,16 @@ void showAddUserPage() {
     "    return false;"
     "  }"
     "  return true;"
-    "}"
+    "} "
     "function validateUsername(username) {"
     "  var regex = /^[a-zA-Z][a-zA-Z0-9]*$/;"
     "  return regex.test(username);"
-    "}"
+    "} "
     "function validatePassword(password) {"
     "  if (password.length <= 6) return false;"
     "  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) return false;"
     "  return true;"
-    "}"
+    "} "
     "</script>"
     "</head><body>"
     "<div class='login-container'>"
@@ -570,6 +568,8 @@ void showAddUserPage() {
     "</div>"
     "</div></div></body></html>");
 }
+
+
 
 // Funkcija za prikaz login prozora
 void showLoginPage(String errorMessage = "") {
