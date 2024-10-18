@@ -5,7 +5,8 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Keypad.h>
-#include <ESP32Servo.h>  // Biblioteka za kontrolu servoa
+#include <ESP32Servo.h>  
+#include <WebSocketsServer.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -25,6 +26,7 @@ struct User {
 std::vector<User> users;
 
 WebServer server(80);
+WebSocketsServer webSocket = WebSocketsServer(81);
 bool loggedIn = false;
 bool userAdded = false;
 User loggedInUser = {"", ""};
@@ -55,7 +57,7 @@ byte colPins[COLS] = {26, 25, 33, 32};
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 String enteredPassword = "";  
-String correctPassword = "123A";  
+String correctPassword = "133A";  
 int attempts = 0;  
 const int maxAttempts = 3;  
 
@@ -75,6 +77,12 @@ void setup() {
     Serial.println("Greška pri montiranju SPIFFS");
     return;
   }
+
+   // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
+  initializeUserFile();
+
+  // Učitavanje korisnika iz fajla pri pokretanju
+  loadUsersFromFile();
 
   pinMode(ledPin, OUTPUT);      // LED dioda na pinu 5
   pinMode(blueLedPin, OUTPUT);  // Plava LED dioda na GPIO 2
@@ -103,6 +111,9 @@ void setup() {
   Serial.println("WiFi povezan. IP adresa: ");
   Serial.println(WiFi.localIP());
 
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+
   server.begin();
 
   // Servo setup
@@ -110,99 +121,125 @@ void setup() {
   myservo.setPeriodHertz(50);  
   myservo.attach(servoPin, 1000, 2000); 
 
-  // Start server handler
-  server.on("/", showMainPage);  
+ // Handleri za različite URL-ove
+  server.on("/", showMainPage);  // Glavni prozor sa dugmadima
+  server.on("/loginPage", showLoginPage);  // Login prozor
+  server.on("/addUserPage", showAddUserPage);  // Dodavanje korisnika
+  server.on("/login", HTTP_POST, handleLogin);
+  server.on("/addUser", HTTP_POST, handleAddUser);
+  server.on("/delete", HTTP_GET, handleUserDeletion);
+  server.on("/H", HTTP_GET, handleLEDOn);
+  server.on("/L", HTTP_GET, handleLEDOff);
+  server.on("/logout", HTTP_GET, handleLogout);
 }
 
 void loop() {
-  server.handleClient();  
-  handlePIRSensor();  
-  handlePasswordInput();  
+  // Obrada klijent server zahteva
+  server.handleClient();
+  
+  // Detekcija pokreta i upravljanje LED diodom i OLED ekranom
+  handlePIRSensor();
+
+  // Ažuriranje unosa PIN-a sa fizičkog tastature i prikaz na OLED-u i web stranici
+  handlePasswordInput();
+
+  // Obrada WebSocket komunikacije
+  webSocket.loop();
 }
+
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_TEXT) {
+    String message = String((char*)payload);
+    // Ovaj deo možeš koristiti ako želiš da primaš poruke sa web stranice (trenutno nije potrebno)
+  }
+}
+
 
 
 // Funkcija za unos PIN-a
 void handlePasswordInput() {
-  if (attempts >= maxAttempts) {
-    // Ako je previše pogrešnih pokušaja, ne dozvoljava dalji unos
-    Serial.println("Unos je blokiran zbog previše pogrešnih pokušaja!");
-    return;
-  }
-
-  char key = keypad.getKey();
+  char key = keypad.getKey();  // Čitanje unosa sa fizičkog tastature
 
   if (key) {
     if (!isEnteringPin) {
-      // Kada korisnik počne da unosi PIN, prebaci sistem u stanje unosa PIN-a
       isEnteringPin = true;
       isWaitingForMotion = false;  // Više ne čekamo pokret
     }
 
-    // Prvo ažuriraj promenljivu `enteredPassword`
     if (key == '#') {
       Serial.print("Unos završen: ");
       Serial.println(enteredPassword);
       if (enteredPassword == correctPassword) {
         Serial.println("Ispravan PIN!");
         displayWelcomeMessage();  // Prikaži poruku "Welcome home!"
-        moveServo();
-        delay(3000);  // Prikaži poruku 3 sekunde pre povratka na "Waiting"
-        resetPIRDetection();  // Resetuj na "Waiting for motion"
+        moveServo();  // Otvaranje vrata (servo motor)
+        delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
+        resetPIRDetection();  // Resetuj sistem na "Waiting for motion" sa normalnim fontom
       } else {
+        // Logika za pogrešan PIN
         attempts++;
         if (attempts >= maxAttempts) {
           Serial.println("Previše pogrešnih pokušaja!");
-          activateErrorLED();  // Aktiviraj crvenu LED za pogrešne pokušaje
-          blockTime = millis();  // Zabeleži vreme kada je unos blokiran
-          delay(3000);  // Ostaviti vreme da LED svetli
-          resetPIRDetection();  // Resetuj sistem i vrati ga na "Waiting for motion"
+          activateErrorLED();  // Aktiviraj crvenu LED
+          blockTime = millis();  // Počni blokadu
+          delay(3000);
+          resetPIRDetection();
         } else {
           Serial.println("Neispravan PIN!");
         }
       }
+
+      // Resetuj PIN unos i na OLED-u i na web stranici
       enteredPassword = "";  
-    } else if (key == '*') {  
+      webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"\"}");  // Obriši unos PIN-a na web stranici
+    } else if (key == '*') {  // Briši poslednji unos
       if (enteredPassword.length() > 0) {
         enteredPassword.remove(enteredPassword.length() - 1);
       }
     } else {
-      enteredPassword += key;  // Dodaj uneseni karakter pre nego što ažuriraš OLED
-    }
+      enteredPassword += key;  // Dodaj uneseni karakter u lozinku
 
-    // Ažuriraj OLED ekran samo kada je unos u toku
-    if (isEnteringPin) {
+      // Ažuriraj prikaz na OLED-u
       display.clearDisplay();
       display.setCursor(0, 0);
-      display.setTextSize(1);  // Vraća veličinu teksta na standardnu
-      display.print("Enter pin:");
+      display.print("Enter password:");
       display.setCursor(0, 20);
       for (int i = 0; i < enteredPassword.length(); i++) {
         display.print("*");
       }
       display.display();
+
+      // Ažuriraj prikaz na web stranici u realnom vremenu
+      webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
     }
   }
 }
 
 
 void resetPIRDetection() {
-  digitalWrite(ledPin, LOW);  
+  digitalWrite(ledPin, LOW);  // Isključi LED diodu
   digitalWrite(blueLedPin, LOW);  // Isključi plavu LED diodu
   enteredPassword = "";
   attempts = 0;
   isEnteringPin = false;  // Završava unos PIN-a
   isWaitingForMotion = true;  // Vraća se u stanje čekanja na pokret
+
+  // Prikaz na OLED-u sa normalnom veličinom teksta
   display.clearDisplay();
   display.setTextSize(1);  // Vrati veličinu teksta na normalnu
   display.setCursor(0, 0);
   display.print("Waiting for motion...");
   display.display();
+
+  // Ažuriraj status na web stranici
+  webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":false}");
 }
+
 
 // Funkcija za detekciju pokreta PIR senzora
 void handlePIRSensor() {
   int pirState = digitalRead(pirPin);
-
   if (pirState == HIGH && isWaitingForMotion) {  // Samo ako čeka na pokret
     Serial.println("Pokret je detektovan!");
     pirActivationTime = millis();
@@ -211,12 +248,17 @@ void handlePIRSensor() {
     display.setCursor(0, 0);
     display.print("Enter pin:");
     display.display();
+    
+    // Ažuriraj status na web stranici
+    webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":true}");
+
     isEnteringPin = true;  // Postavi stanje na unos PIN-a
     isWaitingForMotion = false;  // Više ne čekamo pokret
   } else if (millis() - pirActivationTime > pirTimeout) {
     resetPIRDetection();
   }
 }
+
 
 // Funkcija koja prikazuje poruku "Welcome home!" na OLED-u
 void displayWelcomeMessage() {
@@ -228,7 +270,6 @@ void displayWelcomeMessage() {
   display.print("home!");
   display.display();
 }
-
 
 
 // Funkcija za pomeranje servoa
@@ -397,6 +438,67 @@ void showLoginPage() {
 }
 
 // Funkcija za prikaz dodavanja korisnika
+void showUserPage() {
+  if (!loggedIn) {
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
+    server.send(200, "text/html",
+    "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+    return;
+  }
+
+  // Prikaz korisničke stranice sa LED krugom, tastaturom (estetika) i prikazom unosa PIN-a
+  server.send(200, "text/html",
+    "<html><head>"
+    "<style>"
+    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; text-align: center; }"
+    ".led-circle { width: 100px; height: 100px; border-radius: 50%; background-color: red; margin: 20px auto; }"
+    ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 20px; margin: 20px auto; width: 250px; height: 50px; text-align: center; border-radius: 10px; }"
+    ".keypad { display: grid; grid-template-columns: repeat(4, 50px); grid-gap: 10px; margin: 20px auto; justify-content: center; }"
+    ".key { background-color: #00d4ff; color: white; padding: 20px; font-size: 18px; border-radius: 5px; cursor: pointer; }"
+    ".status { font-size: 16px; margin-top: 20px; }"
+    "</style>"
+    "</head><body>"
+
+    "<div class='led-circle' id='ledCircle'></div>"
+    "<div class='screen' id='screen'>Entered PIN:</div>"
+
+    // Tastatura koja je samo estetska, bez funkcionalnosti
+    "<div class='keypad'>"
+    "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
+    "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
+    "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
+    "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
+    "</div>"
+
+    "<div class='status' id='status'>Waiting for motion...</div>"
+
+    "<script>"
+    "let ws = new WebSocket('ws://' + window.location.hostname + ':81/');"
+    "ws.onmessage = function(event) {"
+    "  let data = JSON.parse(event.data);"
+    "  if (data.type === 'motion') {"
+    "    document.getElementById('status').innerText = data.state ? 'Motion detected!' : 'Waiting for motion...';"
+    "    toggleLed(data.state);"
+    "  } else if (data.type === 'pin') {"
+    "    document.getElementById('screen').innerText = 'Entered PIN: ' + '*'.repeat(data.value.length);"
+    "  }"
+    "};"
+
+    "function toggleLed(isOn) {"
+    "  const ledCircle = document.getElementById('ledCircle');"
+    "  ledCircle.style.backgroundColor = isOn ? 'green' : 'red';"
+    "}"
+    "</script>"
+
+    "</body></html>"
+  );
+}
+
+
+
+// Funkcija za prikaz dodavanja korisnika
 void showAddUserPage() {
     String message = "";
     if (userAdded) {
@@ -415,9 +517,12 @@ void showAddUserPage() {
     ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
     ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
     ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 10px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; height: auto; margin-top: 30px; }"
+    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; }"
+    ".form-container { display: flex; justify-content: space-between; }"
+    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; margin-left: 30px; font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; height: auto; margin-top: 30px; }"
     ".form-container { display: flex; justify-content: space-between; align-items: center; }"  // Poravnavanje oba prozora
     ".rules-header { font-size: 18px; font-weight: bold; margin-bottom: 10px; font-family: 'Georgia', serif; }"
+    ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; }"
     ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; text-align: center; }"
     "</style>"
     "<script>"
@@ -465,7 +570,6 @@ void showAddUserPage() {
     "</div>"
     "</div></div></body></html>");
 }
-
 
 // Funkcija za prikaz login prozora
 void showLoginPage(String errorMessage = "") {
@@ -633,31 +737,6 @@ void handleLEDOff() {
 }
 
 
-// Funkcija za prikaz korisničke stranice
-void showUserPage() {
-  if (!loggedIn) {
-    // Ako korisnik nije prijavljen, preusmeri ga na login
-    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    server.sendHeader("Pragma", "no-cache");
-    server.sendHeader("Expires", "-1");
-    server.send(200, "text/html",
-    "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
-    return;
-  }
-
-  // Prikaz korisničke stranice
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "-1");
-
-  server.send(200, "text/html",
-  "<html><body>"
-  "<h2>LED Control</h2>"
-  "Click <a href=\"/H\">here</a> to turn the LED on.<br>"
-  "Click <a href=\"/L\">here</a> to turn the LED off.<br>"
-  "<div style='margin-top: 20px;'><a href='/logout'><button class='logout-button'>Logout</button></a></div>"
-  "</body></html>");
-}
 
 
 // Funkcija za prikaz admin panela
