@@ -546,12 +546,17 @@ void showAddUserPage() {
     "function validateForm() {"
     "  var username = document.querySelector('input[name=\"username\"]').value;"
     "  var password = document.querySelector('input[name=\"password\"]').value;"
+    "  var confirmPassword = document.querySelector('input[name=\"confirm_password\"]').value;"
     "  if (!validateUsername(username)) {"
     "    alert('Username must start with a letter and contain only letters and numbers.');"
     "    return false;"
     "  }"
     "  if (!validatePassword(password)) {"
     "    alert('Password must be longer than 6 characters and contain at least one lowercase letter, one uppercase letter, and one number.');"
+    "    return false;"
+    "  }"
+    "  if (password !== confirmPassword) {"
+    "    alert('Password and Confirm Password do not match!');"
     "    return false;"
     "  }"
     "  return true;"
@@ -574,6 +579,7 @@ void showAddUserPage() {
     "<form action='/addUser' method='POST' onsubmit='return validateForm()'>"
     "Username: <input type='text' name='username'><br>"
     "Password: <input type='password' name='password'><br>"
+    "Confirm Password: <input type='password' name='confirm_password'><br>"
     "<input type='submit' value='Add User'>"
     "</form>"
     "<a href='/' class='back-button'>Back to Main Page</a>"
@@ -587,6 +593,7 @@ void showAddUserPage() {
     "</div>"
     "</div></div></body></html>");
 }
+
 
 
 
