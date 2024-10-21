@@ -38,6 +38,8 @@ const int blueLedPin = 2;  // Pin za plavu LED diodu (GPIO 2)
 int blockTime = 0; // Vreme koje blokira korisnika nakon 3 pogrešna unosa
 bool isEnteringPin = false;  // Prati da li je u toku unos PIN-a
 bool isWaitingForMotion = true;  // Da li sistem čeka na pokret
+bool loginFailed = false;  // Globalna promenljiva za praćenje neuspešnog logina
+
 
 
 // Keypad setup
@@ -431,41 +433,70 @@ void showMainPage() {
 
 // Funkcija za prikaz login prozora
 void showLoginPage() {
-  server.send(200, "text/html",
-  "<html><head>"
-  "<style>"
-  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-  ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-  ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
-  ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
-  ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-  ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
-  ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
-  ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-  "</style>"
-  "</head><body>"
-  "<div class='login-container'>"
-  "<div class='login-box'>"
-  "<h1>Login</h1>"
-  "<form action='/login' method='POST'>"
-  "Username: <input type='text' name='username'><br>"
-  "Password: <input type='password' name='password'><br>"
-  "<input type='submit' value='Login'>"
-  "</form>"
-  "<a href='/' class='back-button'>Back to Main Page</a>"
-  "</div></div></body></html>");
-}
+    String message = "";
+    if (loginFailed) {
+        message = "<p style='color:red; text-align:center;'>Wrong username or password!</p>";
+        loginFailed = false;  // Resetuj status nakon prikaza poruke
+    }
 
-// Funkcija za prikaz dodavanja korisnika
-void showUserPage() {
-  if (!loggedIn) {
+    // Postavljanje HTTP zaglavlja kako bi se onemogućilo keširanje
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
+
     server.send(200, "text/html",
-    "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
-    return;
-  }
+    "<html><head>"
+    "<style>"
+    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+    ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
+    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
+    ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
+    ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
+    ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+    ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
+    ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
+    "</style>"
+    "<script>"
+    "window.onload = function() {"
+    "  if (window.history && window.history.pushState) {"
+    "    window.history.pushState(null, '', window.location.href);"
+    "    window.onpopstate = function() {"
+    "      window.history.pushState(null, '', window.location.href);"
+    "    };"
+    "  }"
+    "};"
+    "</script>"
+    "</head><body>"
+    "<div class='login-container'>"
+    "<div class='login-box'>"
+    "<h1>Login</h1>"
+    "<form action='/login' method='POST'>"
+    "Username: <input type='text' name='username'><br>"
+    "Password: <input type='password' name='password'><br>"
+    "<input type='submit' value='Login'>"
+    "</form>"
+    "<a href='/' class='back-button'>Back to Main Page</a>"
+    + message +
+    "</div></div></body></html>");
+}
+
+
+
+// Funkcija za prikaz dodavanja korisnika
+void showUserPage() {
+     if (!loggedIn) {
+        server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        server.sendHeader("Pragma", "no-cache");
+        server.sendHeader("Expires", "-1");
+        server.send(200, "text/html",
+        "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+        return;
+    }
+
+    // Zaglavlja za sprečavanje keširanja
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
 
   // Prikaz korisničke stranice sa LED krugom, tastaturom (estetika) i prikazom unosa PIN-a
   server.send(200, "text/html",
@@ -524,6 +555,11 @@ void showAddUserPage() {
         message = "<p style='color:green; text-align:center;'>User added successfully!</p>";
         userAdded = false;  // Resetuj status dodavanja nakon prikaza poruke
     }
+
+    // Zaglavlja za sprečavanje keširanja
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
 
     server.send(200, "text/html",
     "<html><head>"
@@ -597,72 +633,39 @@ void showAddUserPage() {
 
 
 
-// Funkcija za prikaz login prozora
-void showLoginPage(String errorMessage = "") {
-  String message = "";
-  if (errorMessage != "") {
-    message = "<p style='color:red; text-align:center; margin-top:20px;'>" + errorMessage + "</p>";
-  }
-
-  server.send(200, "text/html",
-  "<html><head>"
-  "<style>"
-  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-  ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-  ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
-  ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
-  ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-  ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
-  ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
-  ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-  "</style>"
-  "</head><body>"
-  "<div class='login-container'>"
-  "<div class='login-box'>"
-  "<h1>Login</h1>"
-  "<form action='/login' method='POST'>"
-  "Username: <input type='text' name='username'><br>"
-  "Password: <input type='password' name='password'><br>"
-  "<input type='submit' value='Login'>"
-  "</form>"
-  "<a href='/' class='back-button'>Back to Main Page</a>"
-  + message +  // Poruka o grešci ispod dugmeta
-  "</div></div></body></html>");
-}
-
-
 // Funkcija za obradu logovanja
 void handleLogin() {
-  if (server.hasArg("username") && server.hasArg("password")) {
-    String enteredUsername = server.arg("username");
-    String enteredPassword = server.arg("password");
+    if (server.hasArg("username") && server.hasArg("password")) {
+        String enteredUsername = server.arg("username");
+        String enteredPassword = server.arg("password");
 
-    bool userExists = false;
-    bool passwordCorrect = false;
+        bool userExists = false;
+        bool passwordCorrect = false;
 
-    for (User &u : users) {
-      if (u.username == enteredUsername) {
-        userExists = true;
-        if (u.password == enteredPassword) {
-          passwordCorrect = true;
-          loggedIn = true;
-          loggedInUser = u;
-          break;
+        for (User &u : users) {
+            if (u.username == enteredUsername) {
+                userExists = true;
+                if (u.password == enteredPassword) {
+                    passwordCorrect = true;
+                    loggedIn = true;  // Korisnik je sada ulogovan
+                    loggedInUser = u;
+                    break;
+                }
+            }
         }
-      }
-    }
 
-    if (!userExists || !passwordCorrect) {
-      // Prikazivanje greške direktno na login stranici
-      showLoginPage("Wrong username or password!");
-    } else {
-      if (loggedInUser.username == "admin") {
-        showAdminPage();
-      } else {
-        showUserPage();
-      }
+        if (!userExists || !passwordCorrect) {
+            loginFailed = true;  // Postavi da je login neuspešan
+            showLoginPage();  // Prikaz login stranice sa porukom o grešci
+        } else {
+            // Preusmeravanje na korisničku ili admin stranicu
+            if (loggedInUser.username == "admin") {
+                showAdminPage();  // Idi na admin panel ako je korisnik admin
+            } else {
+                showUserPage();  // Idi na korisničku stranicu ako nije admin
+            }
+        }
     }
-  }
 }
 
 
@@ -818,7 +821,7 @@ void handleLogout() {
   loggedIn = false;
   loggedInUser = {"", ""};  // Resetovanje stanja prijave
 
-  // Postavljanje header-a da se onemogući keširanje
+  // Postavljanje zaglavlja da se onemogući keširanje
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "-1");
