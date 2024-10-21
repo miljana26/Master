@@ -171,23 +171,28 @@ void handlePasswordInput() {
       Serial.print("Unos završen: ");
       Serial.println(enteredPassword);
       if (enteredPassword == correctPassword) {
-        Serial.println("Ispravan PIN!");
-        displayWelcomeMessage();  // Prikaži poruku "Welcome home!"
-        moveServo();  // Otvaranje vrata (servo motor)
-        delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
-        resetPIRDetection();  // Resetuj sistem na "Waiting for motion" sa normalnim fontom
+          Serial.println("Ispravan PIN!");
+          displayWelcomeMessage();  // Prikaži poruku "Welcome home!"
+          moveServo();  // Otvaranje vrata (servo motor)
+          delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
+          resetPIRDetection();  // Resetuj sistem na "Waiting for motion" sa normalnim fontom
       } else {
-        // Logika za pogrešan PIN
-        attempts++;
-        if (attempts >= maxAttempts) {
-          Serial.println("Previše pogrešnih pokušaja!");
-          activateErrorLED();  // Aktiviraj crvenu LED
-          blockTime = millis();  // Počni blokadu
-          delay(3000);
-          resetPIRDetection();
-        } else {
-          Serial.println("Neispravan PIN!");
-        }
+          // Logika za pogrešan PIN
+          attempts++;
+          if (attempts >= maxAttempts) {
+              Serial.println("Previše pogrešnih pokušaja!");
+              activateErrorLED();  // Aktiviraj crvenu LED
+              blockTime = millis();  // Počni blokadu
+              delay(3000);
+              resetPIRDetection();
+          } else {
+              Serial.println("Neispravan PIN!");
+              // Očisti OLED ekran nakon pogrešnog unosa
+              display.clearDisplay();
+              display.setCursor(0, 0);
+              display.print("Enter password:");
+              display.display();
+          }
       }
 
       // Resetuj PIN unos i na OLED-u i na web stranici
