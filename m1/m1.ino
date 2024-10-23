@@ -7,6 +7,8 @@
 #include <Keypad.h>
 #include <ESP32Servo.h>  
 #include <WebSocketsServer.h>
+#include <time.h>
+
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -39,7 +41,8 @@ int blockTime = 0; // Vreme koje blokira korisnika nakon 3 pogrešna unosa
 bool isEnteringPin = false;  // Prati da li je u toku unos PIN-a
 bool isWaitingForMotion = true;  // Da li sistem čeka na pokret
 bool loginFailed = false;  // Globalna promenljiva za praćenje neuspešnog logina
-
+const unsigned long ledOnTimeout = 180000;  // 3 minute timeout for LED
+unsigned long ledTurnOnTime = 0;
 
 
 // Keypad setup
@@ -73,6 +76,9 @@ const unsigned long pirTimeout = 180000;  // 3 minuta timeout
 
 void setup() {
   Serial.begin(115200);
+
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);  // Podesi vremensku zonu za Centralnoevropsko vreme (CET)
 
   // Inicijalizacija SPIFFS
   if (!SPIFFS.begin(true)) {
@@ -155,6 +161,15 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
   }
 }
 
+String getFormattedTime() {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo)) {
+        return "Failed to obtain time";
+    }
+    char timeStr[16];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+    return String(timeStr);
+}
 
 
 // Funkcija za unos PIN-a
@@ -237,45 +252,55 @@ void handlePasswordInput() {
 
 
 void resetPIRDetection() {
-  digitalWrite(ledPin, LOW);  // Isključi LED diodu
-  digitalWrite(blueLedPin, LOW);  // Isključi plavu LED diodu
-  enteredPassword = "";
-  attempts = 0;
-  isEnteringPin = false;  // Završava unos PIN-a
-  isWaitingForMotion = true;  // Vraća se u stanje čekanja na pokret
+    digitalWrite(ledPin, LOW);  // Isključi LED diodu
+    digitalWrite(blueLedPin, LOW);  // Isključi plavu LED diodu
+    enteredPassword = "";
+    attempts = 0;
+    isEnteringPin = false;  // Završava unos PIN-a
+    isWaitingForMotion = true;  // Vraća se u stanje čekanja na pokret
 
-  // Prikaz na OLED-u sa normalnom veličinom teksta
-  display.clearDisplay();
-  display.setTextSize(1);  // Vrati veličinu teksta na normalnu
-  display.setCursor(0, 0);
-  display.print("Waiting for motion...");
-  display.display();
+    // Prikaz na OLED-u sa normalnom veličinom teksta
+    display.clearDisplay();
+    display.setTextSize(1);  // Vrati veličinu teksta na normalnu
+    display.setCursor(0, 0);
+    display.print("Waiting for motion...");
+    display.display();
 
-  // Ažuriraj status na web stranici
-  webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":false}");
+    // Ažuriraj status na web stranici
+    webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":false}");
 }
 
 
 // Funkcija za detekciju pokreta PIR senzora
 void handlePIRSensor() {
-  int pirState = digitalRead(pirPin);
-  if (pirState == HIGH && isWaitingForMotion) {  // Samo ako čeka na pokret
-    Serial.println("Pokret je detektovan!");
-    pirActivationTime = millis();
-    digitalWrite(ledPin, HIGH);  // Aktiviraj LED na pinu 5
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.print("Enter pin:");
-    display.display();
-    
-    // Ažuriraj status na web stranici
-    webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":true}");
+    int pirState = digitalRead(pirPin);
+    if (pirState == HIGH && isWaitingForMotion) {  // Samo ako čeka na pokret
+        Serial.println("Pokret je detektovan!");
+        String detectionTime = getFormattedTime();
+        Serial.println("Vreme detekcije: " + detectionTime);
+        pirActivationTime = millis();
+        ledTurnOnTime = millis();  // Zabeleži vreme kada je LED uključena
+        digitalWrite(ledPin, HIGH);  // Aktiviraj LED na pinu 5
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.print("Motion at:");
+        display.setCursor(0, 20);
+        display.print(detectionTime);
+        display.display();
+        
+        // Ažuriraj status na web stranici
+        webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":true, \"time\":\"" + detectionTime + "\"}");
 
-    isEnteringPin = true;  // Postavi stanje na unos PIN-a
-    isWaitingForMotion = false;  // Više ne čekamo pokret
-  } else if (millis() - pirActivationTime > pirTimeout) {
-    resetPIRDetection();
-  }
+        isEnteringPin = true;  // Postavi stanje na unos PIN-a
+        isWaitingForMotion = false;  // Više ne čekamo pokret
+    } 
+    // Provera da li je prošlo 3 minuta bez unosa šifre
+    else if (isEnteringPin && millis() - ledTurnOnTime > ledOnTimeout) {
+        Serial.println("Prošlo je 3 minuta, LED se isključuje.");
+        resetPIRDetection();  // Vraćanje sistema u stanje čekanja na pokret
+    } else if (millis() - pirActivationTime > pirTimeout) {
+        resetPIRDetection();  // Resetuje se PIR detekcija ako je prošlo više od 3 minuta bez aktivnosti
+    }
 }
 
 
@@ -496,8 +521,8 @@ void showUserPage() {
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
 
-  // Prikaz korisničke stranice sa LED krugom, tastaturom (estetika), prikazom unosa PIN-a i logout dugmetom
-  server.send(200, "text/html",
+    // Prikaz korisničke stranice sa LED krugom, tastaturom (estetika), prikazom unosa PIN-a i logout dugmetom
+    server.send(200, "text/html",
     "<html><head>"
     "<style>"
     "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; text-align: center; }"
@@ -531,7 +556,7 @@ void showUserPage() {
     "ws.onmessage = function(event) {"
     "  let data = JSON.parse(event.data);"
     "  if (data.type === 'motion') {"
-    "    document.getElementById('status').innerText = data.state ? 'Motion detected!' : 'Waiting for motion...';"
+    "    document.getElementById('status').innerText = data.state ? 'Motion detected at ' + data.time : 'Waiting for motion...';"
     "    toggleLed(data.state);"
     "  } else if (data.type === 'pin') {"
     "    document.getElementById('screen').innerText = 'Entered PIN: ' + '*'.repeat(data.value.length);"
@@ -545,9 +570,8 @@ void showUserPage() {
     "</script>"
 
     "</body></html>"
-  );
+    );
 }
-
 
 
 // Funkcija za prikaz dodavanja korisnika
