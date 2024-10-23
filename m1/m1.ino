@@ -130,8 +130,6 @@ void setup() {
   server.on("/login", HTTP_POST, handleLogin);
   server.on("/addUser", HTTP_POST, handleAddUser);
   server.on("/delete", HTTP_GET, handleUserDeletion);
-  server.on("/H", HTTP_GET, handleLEDOn);
-  server.on("/L", HTTP_GET, handleLEDOff);
   server.on("/logout", HTTP_GET, handleLogout);
 }
 
@@ -498,7 +496,7 @@ void showUserPage() {
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
 
-  // Prikaz korisničke stranice sa LED krugom, tastaturom (estetika) i prikazom unosa PIN-a
+  // Prikaz korisničke stranice sa LED krugom, tastaturom (estetika), prikazom unosa PIN-a i logout dugmetom
   server.send(200, "text/html",
     "<html><head>"
     "<style>"
@@ -508,6 +506,8 @@ void showUserPage() {
     ".keypad { display: grid; grid-template-columns: repeat(4, 50px); grid-gap: 10px; margin: 20px auto; justify-content: center; }"
     ".key { background-color: #00d4ff; color: white; padding: 20px; font-size: 18px; border-radius: 5px; cursor: pointer; }"
     ".status { font-size: 16px; margin-top: 20px; }"
+    ".logout-button { background-color: #00d4ff; color: white; padding: 15px 40px; font-size: 18px; border-radius: 25px; position: absolute; top: 20px; right: 20px; cursor: pointer; }"
+    ".logout-button:hover { background-color: #00a3cc; }"
     "</style>"
     "</head><body>"
 
@@ -524,6 +524,8 @@ void showUserPage() {
 
     "<div class='status' id='status'>Waiting for motion...</div>"
 
+    "<a href='/logout'><button class='logout-button'>Logout</button></a>"
+
     "<script>"
     "let ws = new WebSocket('ws://' + window.location.hostname + ':81/');"
     "ws.onmessage = function(event) {"
@@ -539,7 +541,7 @@ void showUserPage() {
     "function toggleLed(isOn) {"
     "  const ledCircle = document.getElementById('ledCircle');"
     "  ledCircle.style.backgroundColor = isOn ? 'green' : 'red';"
-    "}"
+    "} "
     "</script>"
 
     "</body></html>"
@@ -752,20 +754,6 @@ void handleUserDeletion() {
     showAdminPage();
   }
 }
-
-// Funkcija za uključivanje LED-a na GPIO 2
-void handleLEDOn() {
-  digitalWrite(2, HIGH);  // Uključi LED na GPIO 2
-  showUserPage();  // Vrati korisnika na user page umesto da ga izloguješ
-}
-
-// Funkcija za isključivanje LED-a na GPIO 2
-void handleLEDOff() {
-  digitalWrite(2, LOW);  // Isključi LED na GPIO 2
-  showUserPage();  // Vrati korisnika na user page umesto da ga izloguješ
-}
-
-
 
 
 // Funkcija za prikaz admin panela
