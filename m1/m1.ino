@@ -16,7 +16,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 const char *ssid = "MS";
 const char *password = "zastomezezas";
 
-// Struktura za login kredencijale
+// Struktura za login korisnika
 struct User {
   String username;
   String password;
