@@ -43,6 +43,8 @@ bool isWaitingForMotion = true;  // Da li sistem čeka na pokret
 bool loginFailed = false;  // Globalna promenljiva za praćenje neuspešnog logina
 const unsigned long ledOnTimeout = 180000;  // 3 minute timeout for LED
 unsigned long ledTurnOnTime = 0;
+String lastGeneratedPin = "";  // Globalna promenljiva za čuvanje poslednjeg generisanog PIN-a
+
 
 
 // Keypad setup
@@ -592,33 +594,34 @@ void showAddUserPage() {
     "<style>"
     "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
     ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; min-height: 400px; /* Postavljena minimalna visina za login prozor */ }"
-    ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
-    ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-    ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 350px; min-height: 200px; }"
+    ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; font-size: 24px; }"
+    ".login-box label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; }" // Label iznad polja za unos
+    ".login-box input { width: 350px; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
+    ".login-box input[type='text'] { background-color: #112240; color: #000000; }"
     ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
     ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-    ".bubble { background-color: #f1f1f1; border-radius: 10px; padding: 15px; width: 300px; /* Manja širina za bubble */"
-    "font-family: 'Helvetica Neue', sans-serif; font-size: 14px; color: #333333; display: flex; justify-content: center; align-items: center; flex-direction: column; text-align: center; min-height: 400px; /* Postavljena minimalna visina da odgovara login prozoru */ margin-left: 30px; }"  // Razmak između login box i bubble
-    ".form-container { display: flex; justify-content: space-between; align-items: center; }"
-    ".rules-header { font-size: 18px; font-weight: bold; margin-bottom: 10px; font-family: 'Georgia', serif; }"
-    ".rules-text { font-size: 14px; line-height: 1.5; color: #333333; font-family: 'Georgia', serif; text-align: center; }"
+    
+    /* Tooltip stilovi */
+    ".tooltip { position: relative; display: inline-block; }"
+    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 320px; top: 0px; }"
+    ".tooltip:hover .tooltiptext { visibility: visible; }"
+
+    /* Stilovi za CAPTCHA */
+    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: 10px; }"
+    ".captcha input[type='checkbox'] { width: 20px; height: 20px; margin-right: 8px; }"
+    ".captcha label { color: #00d4ff; font-family: 'Roboto', sans-serif; font-size: 16px; font-weight: bold; }"
     "</style>"
     "<script>"
     "function validateForm() {"
     "  var username = document.querySelector('input[name=\"username\"]').value;"
-    "  var password = document.querySelector('input[name=\"password\"]').value;"
-    "  var confirmPassword = document.querySelector('input[name=\"confirm_password\"]').value;"
+    "  var captchaChecked = document.querySelector('input[name=\"captcha\"]').checked;"
     "  if (!validateUsername(username)) {"
     "    alert('Username must start with a letter and contain only letters and numbers.');"
     "    return false;"
     "  }"
-    "  if (!validatePassword(password)) {"
-    "    alert('Password must be longer than 6 characters and contain at least one lowercase letter, one uppercase letter, and one number.');"
-    "    return false;"
-    "  }"
-    "  if (password !== confirmPassword) {"
-    "    alert('Password and Confirm Password do not match!');"
+    "  if (!captchaChecked) {"
+    "    alert('Please confirm you are not a robot.');"
     "    return false;"
     "  }"
     "  return true;"
@@ -627,34 +630,37 @@ void showAddUserPage() {
     "  var regex = /^[a-zA-Z][a-zA-Z0-9]*$/;"
     "  return regex.test(username);"
     "} "
-    "function validatePassword(password) {"
-    "  if (password.length <= 6) return false;"
-    "  if (!/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password)) return false;"
-    "  return true;"
-    "} "
     "</script>"
     "</head><body>"
     "<div class='login-container'>"
-    "<div class='form-container'>"
     "<div class='login-box'>"
     "<h1>Add User</h1>"
     "<form action='/addUser' method='POST' onsubmit='return validateForm()'>"
-    "Username: <input type='text' name='username'><br>"
-    "Password: <input type='password' name='password'><br>"
-    "Confirm Password: <input type='password' name='confirm_password'><br>"
+    "<label for='username'>Username:</label>"  // Username iznad polja za unos
+    "<div class='tooltip'>"
+    "<input type='text' name='username' id='username'><br>"
+    "<span class='tooltiptext'>"
+    "Username rules:<br>"
+    "- Must start with a letter<br>"
+    "- Only letters and numbers allowed<br>"
+    "- No symbols or spaces"
+    "</span>"
+    "</div>"
+    "<div class='captcha'>"
+    "<input type='checkbox' name='captcha' value='not_a_robot'>"
+    "<label for='captcha'>I am not a robot</label>"
+    "</div>"
     "<input type='submit' value='Add User'>"
     "</form>"
     "<a href='/' class='back-button'>Back to Main Page</a>"
-    + message +
-    "</div>"
-    "<div class='bubble'>"
-    "<p class='rules-header'>Username rules:</p>"
-    "<p class='rules-text'>- Must not start with a number<br>- No symbols allowed<br>- Only letters and numbers are valid</p>"
-    "<p class='rules-header'>Password rules:</p>"
-    "<p class='rules-text'>- At least one uppercase letter<br>- At least one lowercase letter<br>- At least one number<br>- Longer than 6 characters</p>"
-    "</div>"
+    + message +  // Uspešna poruka dodavanja korisnika
     "</div></div></body></html>");
 }
+
+
+
+
+
 
 
 
@@ -697,9 +703,8 @@ void handleLogin() {
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
-  if (server.hasArg("username") && server.hasArg("password")) {
+  if (server.hasArg("username") && server.hasArg("captcha")) {
     String newUsername = server.arg("username");
-    String newPassword = server.arg("password");
 
     bool userExists = false;
     for (User &u : users) {
@@ -709,13 +714,18 @@ void handleAddUser() {
       }
     }
 
-    if (!userExists && isValidUsername(newUsername) && isValidPassword(newPassword)) {
-      User newUser = {newUsername, newPassword};
+    if (!userExists && isValidUsername(newUsername)) {
+      // Generiši jedinstveni PIN
+      String newPin = generateUniquePin();
+
+      // Dodaj novog korisnika sa generisanim PIN-om
+      User newUser = {newUsername, newPin};
       users.push_back(newUser);
       userAdded = true;
+      lastGeneratedPin = newPin;  // Sačuvaj generisani PIN za prikaz
 
       // Sačuvaj novog korisnika u fajl
-      saveUserToFile(newUsername, newPassword);
+      saveUserToFile(newUsername, newPin);
 
       showAddUserPage();  // Prikaži stranicu nakon dodavanja korisnika
     } else {
@@ -726,6 +736,15 @@ void handleAddUser() {
       "</body></html>");
     }
   }
+}
+
+// Funkcija za generisanje jedinstvenog PIN-a
+String generateUniquePin() {
+  String pin = "";
+  for (int i = 0; i < 4; i++) {
+    pin += String(random(0, 10));  // Generiši PIN od 4 cifre
+  }
+  return pin;
 }
 
 // Funkcija za validaciju username-a
