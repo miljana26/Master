@@ -115,7 +115,7 @@ void handlePasswordInput() {
       Serial.println(enteredPassword);
       if (enteredPassword == correctPassword) {
         Serial.println("Ispravan PIN!");
-        displayWelcomeMessage();  // Prikaži poruku "Welcome home!"
+        displayWelcomeMessage(loggedInUser.username);  // Prikaži poruku sa imenom korisnika
         moveServo();  // Otvaranje vrata (servo motor)
         delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
         resetPIRDetection();  // Resetuj sistem na "Waiting for motion" sa normalnim fontom
@@ -240,16 +240,27 @@ void resetPIRDetection() {
 
 
 
-// Funkcija koja prikazuje poruku "Welcome home!" na OLED-u
-void displayWelcomeMessage() {
+// Funkcija koja prikazuje poruku "Welcome home (ime korisnika)" na OLED-u
+void displayWelcomeMessage(String username) {
   display.clearDisplay();
-  display.setCursor(0, 0);
-  display.setTextSize(2);  // Povećaj veličinu teksta za "Welcome home"
+  display.setTextSize(1);  // Postavi veličinu teksta na 1
+
+  // Prikaži "Welcome" centrirano na ekranu
+  display.setCursor((SCREEN_WIDTH - 6 * 7) / 2, 10);  // 6 piksela po karakteru, reč "Welcome" ima 7 karaktera
   display.print("Welcome");
-  display.setCursor(0, 30);  // Drugi red
+
+  // Prikaži "home!" centrirano na ekranu ispod "Welcome"
+  display.setCursor((SCREEN_WIDTH - 6 * 5) / 2, 25);  // 6 piksela po karakteru, reč "home!" ima 5 karaktera
   display.print("home!");
+
+  // Prikaži ime korisnika centrirano na ekranu ispod "home!"
+  display.setCursor((SCREEN_WIDTH - 6 * username.length()) / 2, 40);  // Računa se dužina korisničkog imena
+  display.print(username);
+
+  // Osveži ekran
   display.display();
 }
+
 
 
 // Funkcija za pomeranje servoa
