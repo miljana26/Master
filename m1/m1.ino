@@ -44,6 +44,9 @@ bool loginFailed = false;  // Globalna promenljiva za praćenje neuspešnog logi
 const unsigned long ledOnTimeout = 180000;  // 3 minute timeout for LED
 unsigned long ledTurnOnTime = 0;
 String lastGeneratedPin = "";  // Globalna promenljiva za čuvanje poslednjeg generisanog PIN-a
+const unsigned long pirDebounceDelay = 500;  // 500 ms debounce period
+unsigned long lastPirReadTime = 0;
+bool lastPirState = LOW;
 
 
 
@@ -176,8 +179,16 @@ void handlePasswordInput() {
 }
 
 void handlePIRSensor() {
-    int pirState = digitalRead(pirPin);
-    if (pirState == HIGH && isWaitingForMotion) {  // Samo ako čeka na pokret
+    int pirState = digitalRead(pirPin);  // Čitanje trenutnog stanja PIR senzora
+    unsigned long currentTime = millis();
+
+    // Proveri da li se promenilo stanje i da li je prošlo dovoljno vremena od poslednje promene
+    if (pirState != lastPirState) {
+        lastPirReadTime = currentTime;  // Ažuriraj vreme poslednje promene stanja
+    }
+
+    // Ako je prošlo dovoljno vremena i PIR signal je i dalje stabilan
+    if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
         Serial.println("Pokret je detektovan!");
         String detectionTime = getFormattedTime();
         Serial.println("Vreme detekcije: " + detectionTime);
@@ -186,7 +197,7 @@ void handlePIRSensor() {
         digitalWrite(ledPin, HIGH);  // Aktiviraj LED na pinu 5
 
         // Ažuriraj status LED diode na web stranici
-        webSocket.broadcastTXT("{\"type\":\"led\",\"state\":true}"); 
+        webSocket.broadcastTXT("{\"type\":\"led\",\"state\":true}");
 
         display.clearDisplay();
         display.setCursor(0, 0);
@@ -200,14 +211,11 @@ void handlePIRSensor() {
 
         isEnteringPin = true;  // Postavi stanje na unos PIN-a
         isWaitingForMotion = false;  // Više ne čekamo pokret
-    } 
-    // Provera da li je prošlo 3 minuta bez unosa šifre
-    else if (isEnteringPin && millis() - ledTurnOnTime > ledOnTimeout) {
-        Serial.println("Prošlo je 3 minuta, LED se isključuje.");
-        resetPIRDetection();  // Vraćanje sistema u stanje čekanja na pokret
     } else if (millis() - pirActivationTime > pirTimeout) {
         resetPIRDetection();  // Resetuje se PIR detekcija ako je prošlo više od 3 minuta bez aktivnosti
     }
+
+    lastPirState = pirState;  // Sačuvaj trenutno stanje PIR senzora
 }
 
 void resetPIRDetection() {
@@ -512,7 +520,7 @@ void showUserPage() {
     // Logout Button
     "<a href='/logout'><button class='logout-button'>Logout</button></a>"
 
-     "<script>"
+    "<script>"
     "let ws = new WebSocket('ws://' + window.location.hostname + ':81/');"
     "ws.onmessage = function(event) {"
     "  let data = JSON.parse(event.data);"
