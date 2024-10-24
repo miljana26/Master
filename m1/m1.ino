@@ -76,84 +76,7 @@ int pos = 0;
 unsigned long pirActivationTime = 0;
 const unsigned long pirTimeout = 180000;  // 3 minuta timeout
 
-void setup() {
-  Serial.begin(115200);
 
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);  // Podesi vremensku zonu za Centralnoevropsko vreme (CET)
-
-  // Inicijalizacija SPIFFS
-  if (!SPIFFS.begin(true)) {
-    Serial.println("Greška pri montiranju SPIFFS");
-    return;
-  }
-
-   // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
-  initializeUserFile();
-
-  // Učitavanje korisnika iz fajla pri pokretanju
-  loadUsersFromFile();
-
-  pinMode(ledPin, OUTPUT);      // LED dioda na pinu 5
-  pinMode(blueLedPin, OUTPUT);  // Plava LED dioda na GPIO 2
-  pinMode(pirPin, INPUT);       // PIR senzor
-
- // Inicijalizacija OLED-a
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("OLED nije pronađen"));
-    for (;;);
-  }
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.print("Waiting for motion...");
-  display.display();
-
-  // WiFi konekcija
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("WiFi povezan. IP adresa: ");
-  Serial.println(WiFi.localIP());
-
-  webSocket.begin();
-  webSocket.onEvent(webSocketEvent);
-
-  server.begin();
-
-  // Servo setup
-  ESP32PWM::allocateTimer(0);
-  myservo.setPeriodHertz(50);  
-  myservo.attach(servoPin, 1000, 2000); 
-
- // Handleri za različite URL-ove
-  server.on("/", showMainPage);  // Glavni prozor sa dugmadima
-  server.on("/loginPage", showLoginPage);  // Login prozor
-  server.on("/addUserPage", showAddUserPage);  // Dodavanje korisnika
-  server.on("/login", HTTP_POST, handleLogin);
-  server.on("/addUser", HTTP_POST, handleAddUser);
-  server.on("/delete", HTTP_GET, handleUserDeletion);
-  server.on("/logout", HTTP_GET, handleLogout);
-}
-
-void loop() {
-  // Obrada klijent server zahteva
-  server.handleClient();
-  
-  // Detekcija pokreta i upravljanje LED diodom i OLED ekranom
-  handlePIRSensor();
-
-  // Ažuriranje unosa PIN-a sa fizičkog tastature i prikaz na OLED-u i web stranici
-  handlePasswordInput();
-
-  // Obrada WebSocket komunikacije
-  webSocket.loop();
-}
 
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
@@ -252,28 +175,6 @@ void handlePasswordInput() {
   }
 }
 
-
-void resetPIRDetection() {
-    digitalWrite(ledPin, LOW);  // Isključi LED diodu
-    digitalWrite(blueLedPin, LOW);  // Isključi plavu LED diodu
-    enteredPassword = "";
-    attempts = 0;
-    isEnteringPin = false;  // Završava unos PIN-a
-    isWaitingForMotion = true;  // Vraća se u stanje čekanja na pokret
-
-    // Prikaz na OLED-u sa normalnom veličinom teksta
-    display.clearDisplay();
-    display.setTextSize(1);  // Vrati veličinu teksta na normalnu
-    display.setCursor(0, 0);
-    display.print("Waiting for motion...");
-    display.display();
-
-    // Ažuriraj status na web stranici
-    webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":false}");
-}
-
-
-// Funkcija za detekciju pokreta PIR senzora
 void handlePIRSensor() {
     int pirState = digitalRead(pirPin);
     if (pirState == HIGH && isWaitingForMotion) {  // Samo ako čeka na pokret
@@ -283,6 +184,10 @@ void handlePIRSensor() {
         pirActivationTime = millis();
         ledTurnOnTime = millis();  // Zabeleži vreme kada je LED uključena
         digitalWrite(ledPin, HIGH);  // Aktiviraj LED na pinu 5
+
+        // Ažuriraj status LED diode na web stranici
+        webSocket.broadcastTXT("{\"type\":\"led\",\"state\":true}"); 
+
         display.clearDisplay();
         display.setCursor(0, 0);
         display.print("Motion at:");
@@ -304,6 +209,27 @@ void handlePIRSensor() {
         resetPIRDetection();  // Resetuje se PIR detekcija ako je prošlo više od 3 minuta bez aktivnosti
     }
 }
+
+void resetPIRDetection() {
+    digitalWrite(ledPin, LOW);  // Isključi LED diodu
+    webSocket.broadcastTXT("{\"type\":\"led\",\"state\":false}");  // Ažuriraj web stranicu da LED više ne svetli
+    digitalWrite(blueLedPin, LOW);  // Isključi plavu LED diodu
+    enteredPassword = "";
+    attempts = 0;
+    isEnteringPin = false;  // Završava unos PIN-a
+    isWaitingForMotion = true;  // Vraća se u stanje čekanja na pokret
+
+    // Prikaz na OLED-u sa normalnom veličinom teksta
+    display.clearDisplay();
+    display.setTextSize(1);  // Vrati veličinu teksta na normalnu
+    display.setCursor(0, 0);
+    display.print("Waiting for motion...");
+    display.display();
+
+    // Ažuriraj status na web stranici
+    webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":false}");
+}
+
 
 
 // Funkcija koja prikazuje poruku "Welcome home!" na OLED-u
@@ -509,7 +435,7 @@ void showLoginPage() {
 
 // Funkcija za prikaz dodavanja korisnika
 void showUserPage() {
-     if (!loggedIn) {
+    if (!loggedIn) {
         server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
         server.sendHeader("Pragma", "no-cache");
         server.sendHeader("Expires", "-1");
@@ -523,68 +449,105 @@ void showUserPage() {
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
 
-    // Prikaz korisničke stranice sa LED krugom, tastaturom (estetika), prikazom unosa PIN-a i logout dugmetom
+    // Prikaz korisničke stranice sa LED sijalicom i žicom
     server.send(200, "text/html",
     "<html><head>"
     "<style>"
-    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; text-align: center; }"
-    ".led-circle { width: 100px; height: 100px; border-radius: 50%; background-color: red; margin: 20px auto; }"
-    ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 20px; margin: 20px auto; width: 250px; height: 50px; text-align: center; border-radius: 10px; }"
-    ".keypad { display: grid; grid-template-columns: repeat(4, 50px); grid-gap: 10px; margin: 20px auto; justify-content: center; }"
-    ".key { background-color: #00d4ff; color: white; padding: 20px; font-size: 18px; border-radius: 5px; cursor: pointer; }"
-    ".status { font-size: 16px; margin-top: 20px; }"
-    ".logout-button { background-color: #00d4ff; color: white; padding: 15px 40px; font-size: 18px; border-radius: 25px; position: absolute; top: 20px; right: 20px; cursor: pointer; }"
+    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; display: flex; justify-content: flex-start; height: 100vh; margin: 0; position: relative; }"
+
+    /* Stil za žicu */
+    ".wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }"
+
+    /* Stil za sijalicu */
+    ".bulb { position: absolute; top: calc(40vh + 80px); left: 50%; transform: translate(-50%, -20px); width: 80px; height: 80px; background: #444; border-radius: 50%; z-index: 2; }"
+    ".bulb:before { content: ''; position: absolute; left: 22.5px; top: -50px; width: 35px; height: 80px; background: #444; border-top: 30px solid #000; border-radius: 10px; }"
+
+    /* Kada je sijalica upaljena */
+    "body.on .bulb::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; background: #fff; border-radius: 50%; filter: blur(40px); }"
+    "body.on .bulb { background-color: #fff; box-shadow: 0 0 50px #fff, 0 0 100px #fff, 0 0 150px #fff, 0 0 200px #fff, 0 0 250px #fff, 0 0 300px #fff, 0 0 350px #fff; }"
+    "body.on .bulb::before { background: #fff; }"
+    
+    /* Stil za PIN i tastaturu */
+    ".pin-keypad-container { display: flex; flex-direction: column; align-items: flex-start; margin-left: 100px; margin-top: 100px; }"
+    ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; margin-bottom: 10px; margin-top: 50px; width: 250px; text-align: left; border-radius: 10px; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 55px; }"
+    ".pin-display { font-size: 22px; margin-top: 5px; }"
+    ".keypad { display: grid; grid-template-columns: repeat(4, 61px); grid-gap: 8px; margin-top: 10px; justify-content: flex-start; }"
+    ".key { background-color: #00d4ff; color: white; padding: 19px; font-size: 20px; border-radius: 8px; cursor: pointer; text-align: center; }"
+    ".key:hover { background-color: #00a3cc; }"
+
+    /* Stil za statusne boksove */
+    ".right-panel { position: absolute; top: var(--top-offset, 250px); right: var(--right-offset, 100px); display: flex; flex-direction: column; gap: 20px; }"
+    ".status-box { width: var(--status-width, 200px); padding: 10px; border: 2px solid white; text-align: center; background-color: rgba(0, 0, 0, 0.5); }"
+    ".alarm { display: none; }"
+    ".logout-button { background-color: #00d4ff; color: white; padding: 15px; font-size: 18px; border-radius: 20px; cursor: pointer; position: absolute; top: 20px; right: 20px; }"
     ".logout-button:hover { background-color: #00a3cc; }"
     "</style>"
     "</head><body>"
 
-    "<div class='led-circle' id='ledCircle'></div>"
-    "<div class='screen' id='screen'>Entered PIN:</div>"
+    // Žica i sijalica
+    "<div class='wire'></div>"
+    "<div class='bulb' id='ledCircle'></div>"
 
-    // Tastatura koja je samo estetska, bez funkcionalnosti
-    "<div class='keypad'>"
-    "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
-    "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
-    "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
-    "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
+    // Ekran i tastatura
+    "<div class='pin-keypad-container'>"
+        "<div class='screen'>"
+        "Entered PIN:"
+        "<div class='pin-display' id='pin-display'></div>"
+        "</div>"
+        "<div class='keypad'>"
+        "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
+        "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
+        "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
+        "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
+        "</div>"
     "</div>"
 
-    "<div class='status' id='status'>Waiting for motion...</div>"
+    // Right Panel with Status Boxes
+    "<div class='right-panel'>"
+    "<div class='status-box' id='motion-box'>Waiting for motion...</div>"
+    "<div class='status-box alarm' id='alarm-box'>ALARM</div>"
+    "<div class='status-box' id='doors-box'>Closed</div>"
+    "</div>"
 
+    // Logout Button
     "<a href='/logout'><button class='logout-button'>Logout</button></a>"
 
-    "<script>"
+     "<script>"
     "let ws = new WebSocket('ws://' + window.location.hostname + ':81/');"
     "ws.onmessage = function(event) {"
     "  let data = JSON.parse(event.data);"
-    "  if (data.type === 'motion') {"
-    "    document.getElementById('status').innerText = data.state ? 'Motion detected at ' + data.time : 'Waiting for motion...';"
+    "  if (data.type === 'pin') {"
+    "    document.getElementById('pin-display').innerText = '*'.repeat(data.value.length);"
+    "  } else if (data.type === 'motion') {"
+    "    document.getElementById('motion-box').innerText = data.state ? 'Motion detected at ' + data.time : 'Waiting for motion...';"
+    "    document.getElementById('motion-box').style.borderColor = data.state ? 'green' : 'white';"
+    "  } else if (data.type === 'led') {"
     "    toggleLed(data.state);"
-    "  } else if (data.type === 'pin') {"
-    "    document.getElementById('screen').innerText = 'Entered PIN: ' + '*'.repeat(data.value.length);"
     "  }"
     "};"
-
     "function toggleLed(isOn) {"
-    "  const ledCircle = document.getElementById('ledCircle');"
-    "  ledCircle.style.backgroundColor = isOn ? 'green' : 'red';"
-    "} "
+    "  const body = document.querySelector('body');"
+    "  if (isOn) {"
+    "    body.classList.add('on');"
+    "  } else {"
+    "    body.classList.remove('on');"
+    "  }"
+    "}"
     "</script>"
-
-    "</body></html>"
-    );
+    
+    "</body></html>");
 }
 
 
 // Funkcija za prikaz dodavanja korisnika
-void showAddUserPage() {
+void showAddUserPage(String alertMessage = "") {
     String message = "";
     if (userAdded) {
-        message = "<p style='color:green; text-align:center;'>User added successfully!</p>";
-        userAdded = false;  // Resetuj status dodavanja nakon prikaza poruke
+        message = "User added successfully!";
+        userAdded = false;  // Reset status after showing message
     }
 
-    // Zaglavlja za sprečavanje keširanja
+    // Set headers to prevent caching
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
@@ -596,56 +559,43 @@ void showAddUserPage() {
     ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
     ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 350px; min-height: 200px; }"
     ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; font-size: 24px; }"
-    ".login-box label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; }" // Label iznad polja za unos
+    ".login-box label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; }"
     ".login-box input { width: 350px; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-    ".login-box input[type='text'] { background-color: #112240; color: #000000; }"
+    ".login-box input[type='text'] { background-color: #112240; color: #ffffff; }"
     ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
     ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-    
-    /* Tooltip stilovi */
+
+    /* Tooltip styles */
     ".tooltip { position: relative; display: inline-block; }"
     ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 320px; top: 0px; }"
     ".tooltip:hover .tooltiptext { visibility: visible; }"
 
-    /* Stilovi za CAPTCHA */
+    /* CAPTCHA styles */
     ".captcha { display: flex; align-items: center; justify-content: center; margin-top: 10px; }"
     ".captcha input[type='checkbox'] { width: 20px; height: 20px; margin-right: 8px; }"
     ".captcha label { color: #00d4ff; font-family: 'Roboto', sans-serif; font-size: 16px; font-weight: bold; }"
     "</style>"
     "<script>"
-    "function validateForm() {"
-    "  var username = document.querySelector('input[name=\"username\"]').value;"
-    "  var captchaChecked = document.querySelector('input[name=\"captcha\"]').checked;"
-    "  if (!validateUsername(username)) {"
-    "    alert('Username must start with a letter and contain only letters and numbers.');"
-    "    return false;"
+    "window.onload = function() {"
+    "  var alertMessage = '" + alertMessage + "';"
+    "  if (alertMessage !== '') {"
+    "    alert(alertMessage);"
     "  }"
-    "  if (!captchaChecked) {"
-    "    alert('Please confirm you are not a robot.');"
-    "    return false;"
-    "  }"
-    "  return true;"
-    "} "
-    "function validateUsername(username) {"
-    "  var regex = /^[a-zA-Z][a-zA-Z0-9]*$/;"
-    "  return regex.test(username);"
-    "} "
+    "};"
     "</script>"
     "</head><body>"
     "<div class='login-container'>"
     "<div class='login-box'>"
     "<h1>Add User</h1>"
-    "<form action='/addUser' method='POST' onsubmit='return validateForm()'>"
-    "<label for='username'>Username:</label>"  // Username iznad polja za unos
-    "<div class='tooltip'>"
-    "<input type='text' name='username' id='username'><br>"
+    "<form action='/addUser' method='POST'>"
+    "<label for='username'>Username:</label>"
+    "<input type='text' name='username' id='username' class='tooltip'>"
     "<span class='tooltiptext'>"
     "Username rules:<br>"
     "- Must start with a letter<br>"
     "- Only letters and numbers allowed<br>"
     "- No symbols or spaces"
-    "</span>"
-    "</div>"
+    "</span><br>"
     "<div class='captcha'>"
     "<input type='checkbox' name='captcha' value='not_a_robot'>"
     "<label for='captcha'>I am not a robot</label>"
@@ -653,16 +603,9 @@ void showAddUserPage() {
     "<input type='submit' value='Add User'>"
     "</form>"
     "<a href='/' class='back-button'>Back to Main Page</a>"
-    + message +  // Uspešna poruka dodavanja korisnika
-    "</div></div></body></html>");
+    "</div></div>"
+    "</body></html>");
 }
-
-
-
-
-
-
-
 
 
 // Funkcija za obradu logovanja
@@ -703,40 +646,43 @@ void handleLogin() {
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
-  if (server.hasArg("username") && server.hasArg("captcha")) {
-    String newUsername = server.arg("username");
+    if (server.hasArg("username") && server.hasArg("captcha")) {  // Check if CAPTCHA is confirmed
+        String newUsername = server.arg("username");
 
-    bool userExists = false;
-    for (User &u : users) {
-      if (u.username == newUsername) {
-        userExists = true;
-        break;
-      }
-    }
+        bool userExists = false;
+        for (User &u : users) {
+            if (u.username == newUsername) {
+                userExists = true;
+                break;
+            }
+        }
 
-    if (!userExists && isValidUsername(newUsername)) {
-      // Generiši jedinstveni PIN
-      String newPin = generateUniquePin();
+        if (!userExists && isValidUsername(newUsername)) {  // Check if user already exists
+            // Generate a unique PIN
+            String newPin = generateUniquePin();
 
-      // Dodaj novog korisnika sa generisanim PIN-om
-      User newUser = {newUsername, newPin};
-      users.push_back(newUser);
-      userAdded = true;
-      lastGeneratedPin = newPin;  // Sačuvaj generisani PIN za prikaz
+            // Add new user with generated PIN
+            User newUser = {newUsername, newPin};
+            users.push_back(newUser);
+            userAdded = true;
+            lastGeneratedPin = newPin;  // Save the generated PIN for display
 
-      // Sačuvaj novog korisnika u fajl
-      saveUserToFile(newUsername, newPin);
+            // Save the new user to the file
+            saveUserToFile(newUsername, newPin);
 
-      showAddUserPage();  // Prikaži stranicu nakon dodavanja korisnika
+            showAddUserPage("User added successfully!");  // Show page after adding user
+        } else if (userExists) {  // If username already exists
+            showAddUserPage("Error: User already exists!");  // Show error message
+        } else {
+            showAddUserPage("Invalid username!");  // Show invalid username message
+        }
     } else {
-      server.send(200, "text/html",
-      "<html><body>"
-      "<script>alert('Error: User already exists or invalid input!');</script>"
-      "<meta http-equiv='refresh' content='0;url=/addUserPage' />"
-      "</body></html>");
+        showAddUserPage("Please confirm you are not a robot.");  // Show CAPTCHA message
     }
-  }
 }
+
+
+
 
 // Funkcija za generisanje jedinstvenog PIN-a
 String generateUniquePin() {
@@ -859,4 +805,88 @@ void handleLogout() {
 
   // Preusmeravanje na glavnu stranicu
   showMainPage();
+}
+
+
+void setup() {
+  Serial.begin(115200);
+
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);  // Podesi vremensku zonu za Centralnoevropsko vreme (CET)
+
+  // Inicijalizacija SPIFFS
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Greška pri montiranju SPIFFS");
+    return;
+  }
+
+   // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
+  initializeUserFile();
+
+  // Učitavanje korisnika iz fajla pri pokretanju
+  loadUsersFromFile();
+
+  pinMode(ledPin, OUTPUT);      // LED dioda na pinu 5
+  pinMode(blueLedPin, OUTPUT);  // Plava LED dioda na GPIO 2
+  pinMode(pirPin, INPUT);       // PIR senzor
+
+ // Inicijalizacija OLED-a
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("OLED nije pronađen"));
+    for (;;);
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.print("Waiting for motion...");
+  display.display();
+
+  // WiFi konekcija
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("WiFi povezan. IP adresa: ");
+  Serial.println(WiFi.localIP());
+
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+
+  server.begin();
+
+  // Servo setup
+  ESP32PWM::allocateTimer(0);
+  myservo.setPeriodHertz(50);  
+  myservo.attach(servoPin, 1000, 2000); 
+
+ // Handleri za različite URL-ove
+  server.on("/", showMainPage);  // Glavni prozor sa dugmadima
+  server.on("/loginPage", showLoginPage);  // Login prozor
+  server.on("/addUserPage", []() {
+        showAddUserPage();  // Poziva showAddUserPage bez argumenata
+    });
+
+  server.on("/addUser", HTTP_POST, handleAddUser);
+  server.on("/login", HTTP_POST, handleLogin);
+  server.on("/addUser", HTTP_POST, handleAddUser);
+  server.on("/delete", HTTP_GET, handleUserDeletion);
+  server.on("/logout", HTTP_GET, handleLogout);
+}
+
+void loop() {
+  // Obrada klijent server zahteva
+  server.handleClient();
+  
+  // Detekcija pokreta i upravljanje LED diodom i OLED ekranom
+  handlePIRSensor();
+
+  // Ažuriranje unosa PIN-a sa fizičkog tastature i prikaz na OLED-u i web stranici
+  handlePasswordInput();
+
+  // Obrada WebSocket komunikacije
+  webSocket.loop();
 }
