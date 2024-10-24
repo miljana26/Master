@@ -47,6 +47,13 @@ String lastGeneratedPin = "";  // Globalna promenljiva za čuvanje poslednjeg ge
 const unsigned long pirDebounceDelay = 500;  // 500 ms debounce period
 unsigned long lastPirReadTime = 0;
 bool lastPirState = LOW;
+bool ledState = false;  // Trenutno stanje LED diode
+bool motionState = false;  // Trenutno stanje PIR senzora
+bool alarmState = false;  // Trenutno stanje alarma
+bool doorState = false;  // Trenutno stanje vrata (zatvorena ili otvorena)
+uint8_t loggedInClientNum = -1;  // Promenljiva za čuvanje identifikatora ulogovanog klijenta
+
+
 
 
 
@@ -83,11 +90,32 @@ const unsigned long pirTimeout = 180000;  // 3 minuta timeout
 
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-  if (type == WStype_TEXT) {
-    String message = String((char*)payload);
-    // Ovaj deo možeš koristiti ako želiš da primaš poruke sa web stranice (trenutno nije potrebno)
-  }
+    if (type == WStype_CONNECTED) {
+        Serial.printf("[%u] Connected!\n", num);
+        loggedInClientNum = num;  // Sačuvaj identifikator povezanog klijenta
+    } else if (type == WStype_DISCONNECTED) {
+        Serial.printf("[%u] Disconnected!\n", num);
+        if (num == loggedInClientNum) {
+            loggedInClientNum = -1;  // Resetuj identifikator ako se taj klijent diskonektovao
+        }
+    }
 }
+
+void sendAllStatusesToClient(uint8_t clientNum) {
+    String ledStatusMsg = "{\"type\":\"led\",\"state\":" + String(ledState ? "true" : "false") + "}";
+    String motionStatusMsg = "{\"type\":\"motion\",\"state\":" + String(motionState ? "true" : "false") + ", \"time\":\"" + getFormattedTime() + "\"}";
+    String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":" + String(alarmState ? "true" : "false") + "}";
+    String doorStatusMsg = "{\"type\":\"doors\",\"state\":" + String(doorState ? "true" : "false") + "}";
+    String pinStatusMsg = "{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}";
+
+    webSocket.sendTXT(clientNum, ledStatusMsg);
+    webSocket.sendTXT(clientNum, motionStatusMsg);
+    webSocket.sendTXT(clientNum, alarmStatusMsg);
+    webSocket.sendTXT(clientNum, doorStatusMsg);
+    webSocket.sendTXT(clientNum, pinStatusMsg);
+}
+
+
 
 String getFormattedTime() {
     struct tm timeinfo;
@@ -179,25 +207,21 @@ void handlePasswordInput() {
 }
 
 void handlePIRSensor() {
-    int pirState = digitalRead(pirPin);  // Čitanje trenutnog stanja PIR senzora
+    int pirState = digitalRead(pirPin);
     unsigned long currentTime = millis();
 
-    // Proveri da li se promenilo stanje i da li je prošlo dovoljno vremena od poslednje promene
     if (pirState != lastPirState) {
-        lastPirReadTime = currentTime;  // Ažuriraj vreme poslednje promene stanja
+        lastPirReadTime = currentTime;
     }
 
-    // Ako je prošlo dovoljno vremena i PIR signal je i dalje stabilan
     if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
         Serial.println("Pokret je detektovan!");
         String detectionTime = getFormattedTime();
-        Serial.println("Vreme detekcije: " + detectionTime);
         pirActivationTime = millis();
-        ledTurnOnTime = millis();  // Zabeleži vreme kada je LED uključena
-        digitalWrite(ledPin, HIGH);  // Aktiviraj LED na pinu 5
-
-        // Ažuriraj status LED diode na web stranici
-        webSocket.broadcastTXT("{\"type\":\"led\",\"state\":true}");
+        ledTurnOnTime = millis();
+        digitalWrite(ledPin, HIGH);
+        ledState = true;
+        motionState = true;
 
         display.clearDisplay();
         display.setCursor(0, 0);
@@ -205,39 +229,55 @@ void handlePIRSensor() {
         display.setCursor(0, 20);
         display.print(detectionTime);
         display.display();
-        
-        // Ažuriraj status na web stranici
-        webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":true, \"time\":\"" + detectionTime + "\"}");
 
-        isEnteringPin = true;  // Postavi stanje na unos PIN-a
-        isWaitingForMotion = false;  // Više ne čekamo pokret
-    } else if (millis() - pirActivationTime > pirTimeout) {
-        resetPIRDetection();  // Resetuje se PIR detekcija ako je prošlo više od 3 minuta bez aktivnosti
+        isEnteringPin = true;
+        isWaitingForMotion = false;
     }
 
-    lastPirState = pirState;  // Sačuvaj trenutno stanje PIR senzora
+    lastPirState = pirState;
 }
 
 void resetPIRDetection() {
-    digitalWrite(ledPin, LOW);  // Isključi LED diodu
-    webSocket.broadcastTXT("{\"type\":\"led\",\"state\":false}");  // Ažuriraj web stranicu da LED više ne svetli
-    digitalWrite(blueLedPin, LOW);  // Isključi plavu LED diodu
+    digitalWrite(ledPin, LOW);
+    ledState = false;
+
+    digitalWrite(blueLedPin, LOW);
     enteredPassword = "";
     attempts = 0;
-    isEnteringPin = false;  // Završava unos PIN-a
-    isWaitingForMotion = true;  // Vraća se u stanje čekanja na pokret
+    isEnteringPin = false;
+    isWaitingForMotion = true;
+    alarmState = false;
 
-    // Prikaz na OLED-u sa normalnom veličinom teksta
     display.clearDisplay();
-    display.setTextSize(1);  // Vrati veličinu teksta na normalnu
+    display.setTextSize(1);
     display.setCursor(0, 0);
     display.print("Waiting for motion...");
     display.display();
-
-    // Ažuriraj status na web stranici
-    webSocket.broadcastTXT("{\"type\":\"motion\",\"state\":false}");
 }
 
+void moveServo() {
+    for (pos = 0; pos <= 180; pos += 1) {
+        myservo.write(pos);
+        delay(10);
+    }
+    doorState = true;  // Vrata su otvorena
+
+    delay(1000);
+    for (pos = 180; pos >= 0; pos -= 1) {
+        myservo.write(pos);
+        delay(10);
+    }
+    doorState = false;  // Vrata su zatvorena
+}
+
+void activateErrorLED() {
+    digitalWrite(blueLedPin, HIGH);  
+    alarmState = true;  // Ažuriraj stanje alarma
+
+    delay(5000);  
+    digitalWrite(blueLedPin, LOW);
+    alarmState = false;  // Ažuriraj stanje alarma
+}
 
 
 // Funkcija koja prikazuje poruku "Welcome home (ime korisnika)" na OLED-u
@@ -262,26 +302,6 @@ void displayWelcomeMessage(String username) {
 }
 
 
-
-// Funkcija za pomeranje servoa
-void moveServo() {
-  for (pos = 0; pos <= 180; pos += 1) {
-    myservo.write(pos);
-    delay(10);
-  }
-  delay(1000);
-  for (pos = 180; pos >= 0; pos -= 1) {
-    myservo.write(pos);
-    delay(10);
-  }
-}
-
-// Aktiviraj plavu LED diodu na ESP32 kada ima previše neispravnih pokušaja
-void activateErrorLED() {
-  digitalWrite(blueLedPin , HIGH);  
-  delay(5000);  
-  digitalWrite(blueLedPin , LOW);
-}
 
 
 // Funkcija za inicijalizaciju fajla sa korisnicima
@@ -658,10 +678,14 @@ void handleLogin() {
             } else {
                 showUserPage();  // Idi na korisničku stranicu ako nije admin
             }
+
+            // Pošalji trenutne statuse svim komponentama korisniku koji se upravo ulogovao
+            if (loggedInClientNum != -1) {
+                sendAllStatusesToClient(loggedInClientNum);
+            }
         }
     }
 }
-
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
@@ -908,4 +932,9 @@ void loop() {
 
   // Obrada WebSocket komunikacije
   webSocket.loop();
+
+  // Ako je korisnik ulogovan, pošalji sva trenutna stanja
+    if (loggedInClientNum != -1) {
+        sendAllStatusesToClient(loggedInClientNum);
+    }
 }
