@@ -54,9 +54,6 @@ bool doorState = false;  // Trenutno stanje vrata (zatvorena ili otvorena)
 uint8_t loggedInClientNum = -1;  // Promenljiva za čuvanje identifikatora ulogovanog klijenta
 
 
-
-
-
 // Keypad setup
 const byte ROWS = 4;
 const byte COLS = 4;
@@ -300,8 +297,6 @@ void displayWelcomeMessage(String username) {
   // Osveži ekran
   display.display();
 }
-
-
 
 
 // Funkcija za inicijalizaciju fajla sa korisnicima
@@ -581,8 +576,9 @@ void showUserPage() {
 // Funkcija za prikaz dodavanja korisnika
 void showAddUserPage(String alertMessage = "") {
     String message = "";
+    String alertMessageText = "";
     if (userAdded) {
-        message = "User added successfully!";
+        alertMessageText = "New User Added, Unique PIN: " + lastGeneratedPin;
         userAdded = false;  // Reset status after showing message
     }
 
@@ -599,24 +595,27 @@ void showAddUserPage(String alertMessage = "") {
     ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 350px; min-height: 200px; }"
     ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; font-size: 24px; }"
     ".login-box label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; }"
-    ".login-box input { width: 350px; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-    ".login-box input[type='text'] { background-color: #112240; color: #ffffff; }"
-    ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
-    ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
+    ".username-input { width: 350px; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
+    ".add-fingerprint-button { width: 350px; padding: 15px; margin: 10px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
+    ".add-fingerprint-button:hover { background-color: #00a3cc; }"
+    ".add-user-button { width: 300px; padding: 15px; margin: 10px auto; margin-top: 40px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
+    ".add-user-button:hover { background-color: #00a3cc; }"
+    ".back-button { width: 320px; padding: 15px; margin: 10px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; border: none; }"
+    ".back-button:hover { background-color: #00a3cc; }"
 
     /* Tooltip styles */
     ".tooltip { position: relative; display: inline-block; }"
-    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 320px; top: 0px; }"
+    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 105%; top: -17px; }"
     ".tooltip:hover .tooltiptext { visibility: visible; }"
 
     /* CAPTCHA styles */
-    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: 10px; }"
+    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: -5px; }"
     ".captcha input[type='checkbox'] { width: 20px; height: 20px; margin-right: 8px; }"
     ".captcha label { color: #00d4ff; font-family: 'Roboto', sans-serif; font-size: 16px; font-weight: bold; }"
     "</style>"
     "<script>"
     "window.onload = function() {"
-    "  var alertMessage = '" + alertMessage + "';"
+    "  var alertMessage = '" + (alertMessageText != "" ? alertMessageText : alertMessage) + "';"
     "  if (alertMessage !== '') {"
     "    alert(alertMessage);"
     "  }"
@@ -628,23 +627,27 @@ void showAddUserPage(String alertMessage = "") {
     "<h1>Add User</h1>"
     "<form action='/addUser' method='POST'>"
     "<label for='username'>Username:</label>"
-    "<input type='text' name='username' id='username' class='tooltip'>"
+    "<div class='tooltip'>"
+    "<input type='text' name='username' id='username' class='username-input'>"
     "<span class='tooltiptext'>"
     "Username rules:<br>"
     "- Must start with a letter<br>"
     "- Only letters and numbers allowed<br>"
     "- No symbols or spaces"
-    "</span><br>"
+    "</span>"
+    "</div><br>"
+    "<input type='button' value='Add Fingerprint' class='add-fingerprint-button'><br>"
     "<div class='captcha'>"
     "<input type='checkbox' name='captcha' value='not_a_robot'>"
     "<label for='captcha'>I am not a robot</label>"
     "</div>"
-    "<input type='submit' value='Add User'>"
+    "<input type='submit' value='Add User' class='add-user-button'>"
     "</form>"
     "<a href='/' class='back-button'>Back to Main Page</a>"
     "</div></div>"
     "</body></html>");
 }
+
 
 
 // Funkcija za obradu logovanja
