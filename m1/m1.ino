@@ -5,9 +5,11 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Keypad.h>
-#include <ESP32Servo.h>  
+#include <ESP32Servo.h>
 #include <WebSocketsServer.h>
 #include <time.h>
+#include <ArduinoJson.h>
+
 
 
 #define SCREEN_WIDTH 128
@@ -21,8 +23,9 @@ const char *password = "zastomezezas";
 // Struktura za login korisnika
 struct User {
   String username;
-  String password;
+  String pin;
 };
+
 
 // Lista korisnika
 std::vector<User> users;
@@ -33,8 +36,8 @@ bool loggedIn = false;
 bool userAdded = false;
 User loggedInUser = {"", ""};
 
-const int ledPin = 5;    
-const int pirPin = 15;  
+const int ledPin = 5;
+const int pirPin = 15;
 bool motionDetected = false;  // Flag za praćenje detekcije pokreta
 const int blueLedPin = 2;  // Pin za plavu LED diodu (GPIO 2)
 int blockTime = 0; // Vreme koje blokira korisnika nakon 3 pogrešna unosa
@@ -52,6 +55,8 @@ bool motionState = false;  // Trenutno stanje PIR senzora
 bool alarmState = false;  // Trenutno stanje alarma
 bool doorState = false;  // Trenutno stanje vrata (zatvorena ili otvorena)
 uint8_t loggedInClientNum = -1;  // Promenljiva za čuvanje identifikatora ulogovanog klijenta
+String motionDetectedTime = "";  // Za čuvanje vremena detekcije pokreta
+
 
 
 // Keypad setup
@@ -59,10 +64,10 @@ const byte ROWS = 4;
 const byte COLS = 4;
 
 char keys[ROWS][COLS] = {
-  {'1','2','3','A'},
-  {'4','5','6','B'},
-  {'7','8','9','C'},
-  {'*','0','#','D'}
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
 };
 
 byte rowPins[ROWS] = {13, 12, 14, 27};
@@ -70,10 +75,10 @@ byte colPins[COLS] = {26, 25, 33, 32};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-String enteredPassword = "";  
-String correctPassword = "133A";  
-int attempts = 0;  
-const int maxAttempts = 3;  
+String enteredPassword = "";
+String correctPassword = "133A";
+int attempts = 0;
+const int maxAttempts = 3;
 
 // Servo setup
 Servo myservo;
@@ -87,41 +92,89 @@ const unsigned long pirTimeout = 180000;  // 3 minuta timeout
 
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-    if (type == WStype_CONNECTED) {
-        Serial.printf("[%u] Connected!\n", num);
-        loggedInClientNum = num;  // Sačuvaj identifikator povezanog klijenta
-    } else if (type == WStype_DISCONNECTED) {
-        Serial.printf("[%u] Disconnected!\n", num);
-        if (num == loggedInClientNum) {
-            loggedInClientNum = -1;  // Resetuj identifikator ako se taj klijent diskonektovao
-        }
+  if (type == WStype_CONNECTED) {
+    Serial.printf("[%u] Connected!\n", num);
+    loggedInClientNum = num;  // Sačuvaj identifikator povezanog klijenta
+  } else if (type == WStype_DISCONNECTED) {
+    Serial.printf("[%u] Disconnected!\n", num);
+    if (num == loggedInClientNum) {
+      loggedInClientNum = -1;  // Resetuj identifikator ako se taj klijent diskonektovao
     }
+  }
+}
+String urlEncode(String str) {
+  String encodedString = "";
+  char c;
+  for (unsigned int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+    if (isalnum(c)) {
+      encodedString += c;
+    } else {
+      encodedString += '%';
+      char code0 = (c >> 4) & 0xF;
+      char code1 = c & 0xF;
+      code0 += code0 > 9 ? 'A' - 10 : '0';
+      code1 += code1 > 9 ? 'A' - 10 : '0';
+      encodedString += code0;
+      encodedString += code1;
+    }
+  }
+  return encodedString;
 }
 
-void sendAllStatusesToClient(uint8_t clientNum) {
-    String ledStatusMsg = "{\"type\":\"led\",\"state\":" + String(ledState ? "true" : "false") + "}";
-    String motionStatusMsg = "{\"type\":\"motion\",\"state\":" + String(motionState ? "true" : "false") + ", \"time\":\"" + getFormattedTime() + "\"}";
-    String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":" + String(alarmState ? "true" : "false") + "}";
-    String doorStatusMsg = "{\"type\":\"doors\",\"state\":" + String(doorState ? "true" : "false") + "}";
-    String pinStatusMsg = "{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}";
+String urlDecode(String str) {
+  String decoded = "";
+  char c;
+  int i, len = str.length();
+  for (i = 0; i < len; i++) {
+    c = str.charAt(i);
+    if (c == '+') {
+      decoded += ' ';
+    } else if (c == '%' && i + 2 < len) {
+      char code0 = str.charAt(++i);
+      char code1 = str.charAt(++i);
+      c = (hexToInt(code0) << 4) | hexToInt(code1);
+      decoded += c;
+    } else {
+      decoded += c;
+    }
+  }
+  return decoded;
+}
 
-    webSocket.sendTXT(clientNum, ledStatusMsg);
-    webSocket.sendTXT(clientNum, motionStatusMsg);
-    webSocket.sendTXT(clientNum, alarmStatusMsg);
-    webSocket.sendTXT(clientNum, doorStatusMsg);
-    webSocket.sendTXT(clientNum, pinStatusMsg);
+int hexToInt(char c) {
+  if ('0' <= c && c <= '9') return c - '0';
+  if ('a' <= c && c <= 'f') return c - 'a' + 10;
+  if ('A' <= c && c <= 'F') return c - 'A' + 10;
+  return 0;
+}
+
+
+
+void sendAllStatusesToClient(uint8_t clientNum) {
+  String ledStatusMsg = "{\"type\":\"led\",\"state\":" + String(ledState ? "true" : "false") + "}";
+  String motionStatusMsg = "{\"type\":\"motion\",\"state\":" + String(motionState ? "true" : "false") + ", \"time\":\"" + motionDetectedTime + "\"}";
+  String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":" + String(alarmState ? "true" : "false") + "}";
+  String doorStatusMsg = "{\"type\":\"doors\",\"state\":" + String(doorState ? "true" : "false") + "}";
+  String pinStatusMsg = "{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}";
+
+  webSocket.sendTXT(clientNum, ledStatusMsg);
+  webSocket.sendTXT(clientNum, motionStatusMsg);
+  webSocket.sendTXT(clientNum, alarmStatusMsg);
+  webSocket.sendTXT(clientNum, doorStatusMsg);
+  webSocket.sendTXT(clientNum, pinStatusMsg);
 }
 
 
 
 String getFormattedTime() {
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-        return "Failed to obtain time";
-    }
-    char timeStr[16];
-    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-    return String(timeStr);
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return "Failed to obtain time";
+  }
+  char timeStr[16];
+  strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+  return String(timeStr);
 }
 
 
@@ -150,7 +203,6 @@ void handlePasswordInput() {
         if (attempts >= maxAttempts) {
           Serial.println("Previše pogrešnih pokušaja!");
           activateErrorLED();  // Aktiviraj crvenu LED
-          blockTime = millis();  // Počni blokadu
           delay(3000);
           resetPIRDetection();
         } else {
@@ -164,7 +216,7 @@ void handlePasswordInput() {
       }
 
       // Resetuj PIN unos i na OLED-u i na web stranici
-      enteredPassword = "";  
+      enteredPassword = "";
       webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"\"}");  // Obriši unos PIN-a na web stranici
 
     } else if (key == '*') {  // Briši poslednji uneti karakter
@@ -203,87 +255,135 @@ void handlePasswordInput() {
   }
 }
 
+
 void handlePIRSensor() {
-    int pirState = digitalRead(pirPin);
-    unsigned long currentTime = millis();
+  int pirState = digitalRead(pirPin);
+  unsigned long currentTime = millis();
 
-    // Provera promene stanja PIR senzora
-    if (pirState != lastPirState) {
-        lastPirReadTime = currentTime;
+  // Provera promene stanja PIR senzora
+  if (pirState != lastPirState) {
+    lastPirReadTime = currentTime;
+  }
+
+  // Debounce period i detekcija pokreta
+  if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
+    Serial.println("Pokret je detektovan!");
+    String detectionTime = getFormattedTime();
+    motionDetectedTime = detectionTime; // Sačuvaj vreme detekcije
+    pirActivationTime = millis();  // Beleženje vremena detekcije pokreta
+    ledTurnOnTime = millis();  // Beleženje vremena kada je LED uključena
+    digitalWrite(ledPin, HIGH);  // Uključi LED
+    ledState = true;
+    motionState = true;
+
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Motion at:");
+    display.setCursor(0, 20);
+    display.print(detectionTime);
+    display.display();
+
+    isEnteringPin = true;  // Pokrenut unos PIN-a
+    isWaitingForMotion = false;  // Prestanak čekanja na pokret
+
+    // Pošalji novo stanje pokreta klijentu
+    if (loggedInClientNum != -1) {
+      String motionStatusMsg = "{\"type\":\"motion\",\"state\":true, \"time\":\"" + motionDetectedTime + "\"}";
+      webSocket.sendTXT(loggedInClientNum, motionStatusMsg);
     }
+  }
 
-    // Debounce period i detekcija pokreta
-    if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
-        Serial.println("Pokret je detektovan!");
-        String detectionTime = getFormattedTime();
-        pirActivationTime = millis();  // Beleženje vremena detekcije pokreta
-        ledTurnOnTime = millis();  // Beleženje vremena kada je LED uključena
-        digitalWrite(ledPin, HIGH);  // Uključi LED
-        ledState = true;
-        motionState = true;
+  // Provera da li je prošlo 3 minuta bez unosa šifre (isključivanje LED)
+  if (ledState && (millis() - ledTurnOnTime > ledOnTimeout)) {
+    Serial.println("Prošlo je 3 minuta, LED se isključuje.");
+    resetPIRDetection();  // Resetuje sistem i vraća u stanje čekanja pokreta
+  }
 
-        display.clearDisplay();
-        display.setCursor(0, 0);
-        display.print("Motion at:");
-        display.setCursor(0, 20);
-        display.print(detectionTime);
-        display.display();
-
-        isEnteringPin = true;  // Pokrenut unos PIN-a
-        isWaitingForMotion = false;  // Prestanak čekanja na pokret
-    }
-
-    // Provera da li je prošlo 3 minuta bez unosa šifre (isključivanje LED)
-    if (ledState && (millis() - ledTurnOnTime > ledOnTimeout)) {
-        Serial.println("Prošlo je 3 minuta, LED se isključuje.");
-        resetPIRDetection();  // Resetuje sistem i vraća u stanje čekanja pokreta
-    }
-
-    lastPirState = pirState;
+  lastPirState = pirState;
 }
+
 
 
 void resetPIRDetection() {
-    digitalWrite(ledPin, LOW);
-    ledState = false;
+  digitalWrite(ledPin, LOW);
+  ledState = false;
 
-    digitalWrite(blueLedPin, LOW);
-    enteredPassword = "";
-    attempts = 0;
-    isEnteringPin = false;
-    isWaitingForMotion = true;
-    alarmState = false;
+  digitalWrite(blueLedPin, LOW);
+  enteredPassword = "";
+  attempts = 0;
+  isEnteringPin = false;
+  isWaitingForMotion = true;
+  alarmState = false;
 
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.print("Waiting for motion...");
-    display.display();
+  motionDetectedTime = ""; // Resetuj vreme detekcije pokreta
+  motionState = false;     // Resetuj stanje pokreta
+
+  // Pošalji novo stanje pokreta klijentu
+  if (loggedInClientNum != -1) {
+    String motionStatusMsg = "{\"type\":\"motion\",\"state\":false, \"time\":\"\"}";
+    webSocket.sendTXT(loggedInClientNum, motionStatusMsg);
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("Waiting for motion...");
+  display.display();
 }
+
 
 void moveServo() {
-    for (pos = 0; pos <= 180; pos += 1) {
-        myservo.write(pos);
-        delay(10);
-    }
-    doorState = true;  // Vrata su otvorena
+  for (pos = 0; pos <= 180; pos += 1) {
+    myservo.write(pos);
+    delay(10);
+  }
+  doorState = true;  // Vrata su otvorena
 
-    delay(1000);
-    for (pos = 180; pos >= 0; pos -= 1) {
-        myservo.write(pos);
-        delay(10);
-    }
-    doorState = false;  // Vrata su zatvorena
+  // Pošalji novo stanje vrata klijentu
+  if (loggedInClientNum != -1) {
+    String doorStatusMsg = "{\"type\":\"doors\",\"state\":true}";
+    webSocket.sendTXT(loggedInClientNum, doorStatusMsg);
+  }
+
+  delay(1000);
+  for (pos = 180; pos >= 0; pos -= 1) {
+    myservo.write(pos);
+    delay(10);
+  }
+  doorState = false;  // Vrata su zatvorena
+
+  // Pošalji novo stanje vrata klijentu
+  if (loggedInClientNum != -1) {
+    String doorStatusMsg = "{\"type\":\"doors\",\"state\":false}";
+    webSocket.sendTXT(loggedInClientNum, doorStatusMsg);
+  }
 }
+
+
 
 void activateErrorLED() {
-    digitalWrite(blueLedPin, HIGH);  
-    alarmState = true;  // Ažuriraj stanje alarma
+  digitalWrite(blueLedPin, HIGH);
+  alarmState = true;  // Ažuriraj stanje alarma
 
-    delay(5000);  
-    digitalWrite(blueLedPin, LOW);
-    alarmState = false;  // Ažuriraj stanje alarma
+  // Pošalji novo stanje alarma klijentu
+  if (loggedInClientNum != -1) {
+    String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":true}";
+    webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
+  }
+
+  delay(5000);
+  digitalWrite(blueLedPin, LOW);
+  alarmState = false;  // Ažuriraj stanje alarma
+
+  // Pošalji novo stanje alarma klijentu
+  if (loggedInClientNum != -1) {
+    String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":false}";
+    webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
+  }
 }
+
+
+
 
 
 // Funkcija koja prikazuje poruku "Welcome home (ime korisnika)" na OLED-u
@@ -349,41 +449,41 @@ void initializeUserFile() {
 
 // Funkcija za učitavanje korisnika iz fajla
 void loadUsersFromFile() {
-  File file = SPIFFS.open("/users.txt", "r");
+  File file = SPIFFS.open("/users.txt", FILE_READ);
   if (!file) {
-    Serial.println("Neuspešno otvaranje fajla za korisnike");
+    Serial.println("Fajl sa korisnicima ne postoji");
     return;
   }
 
-  users.clear();  // Očisti trenutnu listu korisnika
-
   while (file.available()) {
     String line = file.readStringUntil('\n');
-    line.trim();  // Dodaj trim() da ukloni prazne prostore
-    int separatorIndex = line.indexOf(',');
-    if (separatorIndex > 0) {
-      String username = line.substring(0, separatorIndex);
-      username.trim();  // Dodaj trim() nakon substring
-      String password = line.substring(separatorIndex + 1);
-      password.trim();  // Dodaj trim() nakon substring
-      users.push_back({username, password});
+    line.trim();
+    if (line.length() == 0) continue;
+
+    int commaIndex = line.indexOf(',');
+    if (commaIndex > 0) {
+      String username = line.substring(0, commaIndex);
+      String pin = line.substring(commaIndex + 1);
+      users.push_back({username, pin});
     }
   }
 
   file.close();
 }
 
+
 // Funkcija za dodavanje korisnika u fajl
-void saveUserToFile(const String& username, const String& password) {
-  File file = SPIFFS.open("/users.txt", "a");  // Otvaranje fajla u append modu
+void saveUserToFile(const String& username, const String& pin) {
+  File file = SPIFFS.open("/users.txt", FILE_APPEND);
   if (!file) {
-    Serial.println("Neuspešno otvaranje fajla za dodavanje korisnika");
+    Serial.println("Greška pri otvaranju fajla za korisnike");
     return;
   }
 
-  file.println(username + "," + password);  // Sačuvaj korisnika u formatu "username,password"
+  file.println(username + "," + pin);
   file.close();
 }
+
 
 // Funkcija za brisanje korisnika iz fajla
 void deleteUserFromFile(const String& usernameToDelete) {
@@ -396,7 +496,7 @@ void deleteUserFromFile(const String& usernameToDelete) {
   for (User &u : users) {
     // Ne dozvoli brisanje admin korisnika
     if (u.username != usernameToDelete && u.username != "admin") {
-      file.println(u.username + "," + u.password);  // Piši samo korisnike koji nisu obrisani
+      file.println(u.username + "," + u.pin);  // Piši samo korisnike koji nisu obrisani
     }
   }
 
@@ -409,393 +509,520 @@ void deleteUserFromFile(const String& usernameToDelete) {
 // Funkcija za prikaz glavnog prozora sa dugmadima
 void showMainPage() {
   server.send(200, "text/html",
-  "<html><head>"
-  "<style>"
-  "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; height: 100vh; margin: 0; display: flex; justify-content: center; align-items: center; }"
-  ".main-container { display: flex; justify-content: center; align-items: center; flex-direction: column; }"
-  ".main-container button { background-color: #00d4ff; color: #ffffff; padding: 20px 40px; margin: 20px; border-radius: 10px; font-size: 20px; border: none; cursor: pointer; width: 300px; }"
-  ".main-container button:hover { background-color: #00a3cc; }"
-  "</style>"
-  "</head><body>"
-  "<div class='main-container'>"
-  "<button onclick=\"location.href='/loginPage'\">Login</button>"
-  "<button onclick=\"location.href='/addUserPage'\">Add User</button>"
-  "</div>"
-  "</body></html>");
+              "<html><head>"
+              "<style>"
+              "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; height: 100vh; margin: 0; display: flex; justify-content: center; align-items: center; }"
+              ".main-container { display: flex; justify-content: center; align-items: center; flex-direction: column; }"
+              ".main-container button { background-color: #00d4ff; color: #ffffff; padding: 20px 40px; margin: 20px; border-radius: 10px; font-size: 20px; border: none; cursor: pointer; width: 300px; }"
+              ".main-container button:hover { background-color: #00a3cc; }"
+              "</style>"
+              "</head><body>"
+              "<div class='main-container'>"
+              "<button onclick=\"location.href='/loginPage'\">Login</button>"
+              "<button onclick=\"location.href='/addUserPage'\">Add User</button>"
+              "</div>"
+              "</body></html>");
 }
 
 
 // Funkcija za prikaz login prozora
 void showLoginPage() {
-    String message = "";
-    if (loginFailed) {
-        message = "<p style='color:red; text-align:center;'>Wrong username or password!</p>";
-        loginFailed = false;  // Resetuj status nakon prikaza poruke
-    }
+  String message = "";
+  if (loginFailed) {
+    message = "<p style='color:red; text-align:center;'>Wrong username or password!</p>";
+    loginFailed = false;  // Resetuj status nakon prikaza poruke
+  }
 
-    // Postavljanje HTTP zaglavlja kako bi se onemogućilo keširanje
-    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    server.sendHeader("Pragma", "no-cache");
-    server.sendHeader("Expires", "-1");
+  // Postavljanje HTTP zaglavlja kako bi se onemogućilo keširanje
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
 
-    server.send(200, "text/html",
-    "<html><head>"
-    "<style>"
-    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-    ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
-    ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
-    ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-    ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
-    ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
-    ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-    "</style>"
-    "<script>"
-    "window.onload = function() {"
-    "  if (window.history && window.history.pushState) {"
-    "    window.history.pushState(null, '', window.location.href);"
-    "    window.onpopstate = function() {"
-    "      window.history.pushState(null, '', window.location.href);"
-    "    };"
-    "  }"
-    "};"
-    "</script>"
-    "</head><body>"
-    "<div class='login-container'>"
-    "<div class='login-box'>"
-    "<h1>Login</h1>"
-    "<form action='/login' method='POST'>"
-    "Username: <input type='text' name='username'><br>"
-    "Password: <input type='password' name='password'><br>"
-    "<input type='submit' value='Login'>"
-    "</form>"
-    "<a href='/' class='back-button'>Back to Main Page</a>"
-    + message +
-    "</div></div></body></html>");
+  server.send(200, "text/html",
+              "<html><head>"
+              "<style>"
+              "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+              ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
+              ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
+              ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
+              ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
+              ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+              ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
+              ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
+              "</style>"
+              "<script>"
+              "window.onload = function() {"
+              "  if (window.history && window.history.pushState) {"
+              "    window.history.pushState(null, '', window.location.href);"
+              "    window.onpopstate = function() {"
+              "      window.history.pushState(null, '', window.location.href);"
+              "    };"
+              "  }"
+              "};"
+              "</script>"
+              "</head><body>"
+              "<div class='login-container'>"
+              "<div class='login-box'>"
+              "<h1>Login</h1>"
+              "<form action='/login' method='POST'>"
+              "Username: <input type='text' name='username'><br>"
+              "Password: <input type='password' name='password'><br>"
+              "<input type='submit' value='Login'>"
+              "</form>"
+              "<a href='/' class='back-button'>Back to Main Page</a>"
+              + message +
+              "</div></div></body></html>");
 }
 
 
 
 // Funkcija za prikaz dodavanja korisnika
 void showUserPage() {
-    if (!loggedIn) {
-        server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-        server.sendHeader("Pragma", "no-cache");
-        server.sendHeader("Expires", "-1");
-        server.send(200, "text/html",
-        "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
-        return;
-    }
-
-    // Zaglavlja za sprečavanje keširanja
-    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  if (!loggedIn) {
+    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
-
-    // Prikaz korisničke stranice sa LED sijalicom i žicom
     server.send(200, "text/html",
-    "<html><head>"
-    "<style>"
-    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; display: flex; justify-content: flex-start; height: 100vh; margin: 0; position: relative; }"
+                "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+    return;
+  }
 
-    /* Stil za žicu */
-    ".wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }"
+  // Zaglavlja za sprečavanje keširanja
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
 
-    /* Stil za sijalicu */
-    ".bulb { position: absolute; top: calc(40vh + 80px); left: 50%; transform: translate(-50%, -20px); width: 80px; height: 80px; background: #444; border-radius: 50%; z-index: 2; }"
-    ".bulb:before { content: ''; position: absolute; left: 22.5px; top: -50px; width: 35px; height: 80px; background: #444; border-top: 30px solid #000; border-radius: 10px; }"
+  // Prikaz korisničke stranice sa ažuriranim HTML, CSS i JavaScript kodom
+  server.send(200, "text/html",
+              "<html><head>"
+              "<style>"
+              "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; height: 100vh; margin: 0; position: relative; }"
 
-    /* Kada je sijalica upaljena */
-    "body.on .bulb::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; background: #fff; border-radius: 50%; filter: blur(40px); }"
-    "body.on .bulb { background-color: #fff; box-shadow: 0 0 50px #fff, 0 0 100px #fff, 0 0 150px #fff, 0 0 200px #fff, 0 0 250px #fff, 0 0 300px #fff, 0 0 350px #fff; }"
-    "body.on .bulb::before { background: #fff; }"
-    
-    /* Stil za PIN i tastaturu */
-    ".pin-keypad-container { display: flex; flex-direction: column; align-items: flex-start; margin-left: 100px; margin-top: 100px; }"
-    ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; margin-bottom: 10px; margin-top: 50px; width: 250px; text-align: left; border-radius: 10px; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 55px; }"
-    ".pin-display { font-size: 22px; margin-top: 5px; }"
-    ".keypad { display: grid; grid-template-columns: repeat(4, 61px); grid-gap: 8px; margin-top: 10px; justify-content: flex-start; }"
-    ".key { background-color: #00d4ff; color: white; padding: 19px; font-size: 20px; border-radius: 8px; cursor: pointer; text-align: center; }"
-    ".key:hover { background-color: #00a3cc; }"
+              /* Stil za žicu */
+              ".wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }"
 
-    /* Stil za statusne boksove */
-    ".right-panel { position: absolute; top: var(--top-offset, 250px); right: var(--right-offset, 100px); display: flex; flex-direction: column; gap: 20px; }"
-    ".status-box { width: var(--status-width, 200px); padding: 10px; border: 2px solid white; text-align: center; background-color: rgba(0, 0, 0, 0.5); }"
-    ".alarm { display: none; }"
-    ".logout-button { background-color: #00d4ff; color: white; padding: 15px; font-size: 18px; border-radius: 20px; cursor: pointer; position: absolute; top: 20px; right: 20px; }"
-    ".logout-button:hover { background-color: #00a3cc; }"
-    "</style>"
-    "</head><body>"
+              /* Stil za sijalicu */
+              ".bulb { position: absolute; top: calc(40vh + 80px); left: 50%; transform: translate(-50%, -20px); width: 80px; height: 80px; background: #444; border-radius: 50%; z-index: 2; }"
+              ".bulb:before { content: ''; position: absolute; left: 22.5px; top: -50px; width: 35px; height: 80px; background: #444; border-top: 30px solid #000; border-radius: 10px; }"
 
-    // Žica i sijalica
-    "<div class='wire'></div>"
-    "<div class='bulb' id='ledCircle'></div>"
+              /* Kada je sijalica upaljena */
+              "body.on .bulb::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; background: #fff; border-radius: 50%; filter: blur(40px); }"
+              "body.on .bulb { background-color: #fff; box-shadow: 0 0 50px #fff, 0 0 100px #fff, 0 0 150px #fff, 0 0 200px #fff, 0 0 250px #fff, 0 0 300px #fff, 0 0 350px #fff; }"
+              "body.on .bulb::before { background: #fff; }"
 
-    // Ekran i tastatura
-    "<div class='pin-keypad-container'>"
-        "<div class='screen'>"
-        "Entered PIN:"
-        "<div class='pin-display' id='pin-display'></div>"
-        "</div>"
-        "<div class='keypad'>"
-        "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
-        "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
-        "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
-        "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
-        "</div>"
-    "</div>"
+              /* Stil za PIN i tastaturu */
+              ".pin-keypad-container { display: flex; flex-direction: column; align-items: flex-start; position: absolute; left: 100px; top: 150px; }"
+              ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; margin-bottom: 10px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; flex-direction: column; justify-content: center; }"
+              ".pin-display { font-size: 22px; margin-top: 5px; }"
+              ".keypad { display: grid; grid-template-columns: repeat(4, 61px); grid-gap: 8px; margin-top: 10px; }"
+              ".key { background-color: #00d4ff; color: white; padding: 19px; font-size: 20px; border-radius: 8px; cursor: pointer; text-align: center; }"
+              ".key:hover { background-color: #00a3cc; }"
 
-    // Right Panel with Status Boxes
-    "<div class='right-panel'>"
-    "<div class='status-box' id='motion-box'>Waiting for motion...</div>"
-    "<div class='status-box alarm' id='alarm-box'>ALARM</div>"
-    "<div class='status-box' id='doors-box'>Closed</div>"
-    "</div>"
+              /* Stil za statusne boksove */
+              ".right-panel { position: absolute; top: 200px; right: 100px; display: flex; flex-direction: column; gap: 30px; }"
+              ".status-box { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; align-items: center; justify-content: center; }"
+              ".status-box.motion-box { /* Individualni stilovi za Motion */ }"
+              ".status-box.alarm-box { /* Individualni stilovi za Alarm */ }"
+              ".status-box.alarm-box.alarm-active { background-color: red; }"
+              ".status-box.door-box { /* Individualni stilovi za Door */ }"
+              ".status-box.door-box.opened { background-color: green; }"
 
-    // Logout Button
-    "<a href='/logout'><button class='logout-button'>Logout</button></a>"
+              /* Logout dugme */
+              ".logout-button { background-color: #00d4ff; color: white; padding: 15px; font-size: 18px; border-radius: 15px; cursor: pointer; position: absolute; top: 20px; right: 20px; }"
+              ".logout-button:hover { background-color: #00a3cc; }"
+              "</style>"
+              "</head><body>"
 
-    "<script>"
-    "let ws = new WebSocket('ws://' + window.location.hostname + ':81/');"
-    "ws.onmessage = function(event) {"
-    "  let data = JSON.parse(event.data);"
-    "  if (data.type === 'pin') {"
-    "    document.getElementById('pin-display').innerText = '*'.repeat(data.value.length);"
-    "  } else if (data.type === 'motion') {"
-    "    document.getElementById('motion-box').innerText = data.state ? 'Motion detected at ' + data.time : 'Waiting for motion...';"
-    "    document.getElementById('motion-box').style.borderColor = data.state ? 'green' : 'white';"
-    "  } else if (data.type === 'led') {"
-    "    toggleLed(data.state);"
-    "  }"
-    "};"
-    "function toggleLed(isOn) {"
-    "  const body = document.querySelector('body');"
-    "  if (isOn) {"
-    "    body.classList.add('on');"
-    "  } else {"
-    "    body.classList.remove('on');"
-    "  }"
-    "}"
-    "</script>"
-    
-    "</body></html>");
+              // Žica i sijalica
+              "<div class='wire'></div>"
+              "<div class='bulb' id='ledCircle'></div>"
+
+              // Ekran i tastatura
+              "<div class='pin-keypad-container'>"
+              "<div class='screen'>"
+              "Entered PIN:"
+              "<div class='pin-display' id='pin-display'></div>"
+              "</div>"
+              "<div class='keypad'>"
+              "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
+              "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
+              "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
+              "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
+              "</div>"
+              "</div>"
+
+              // Desni panel sa statusnim boksovima
+              "<div class='right-panel'>"
+              "<div class='status-box motion-box' id='motion-box'>Waiting for motion...</div>"
+              "<div class='status-box alarm-box' id='alarm-box'>No Alarm</div>"
+              "<div class='status-box door-box' id='doors-box'>Closed</div>"
+              "</div>"
+
+              // Logout dugme
+              "<a href='/logout'><button class='logout-button'>Logout</button></a>"
+
+              "<script>"
+              "let ws = new WebSocket('ws://' + window.location.hostname + ':81/');"
+              "ws.onmessage = function(event) {"
+              "  let data = JSON.parse(event.data);"
+              "  if (data.type === 'pin') {"
+              "    document.getElementById('pin-display').innerText = '*'.repeat(data.value.length);"
+              "  } else if (data.type === 'motion') {"
+              "    if (data.state) {"
+              "      document.getElementById('motion-box').innerText = 'Motion detected at ' + data.time;"
+              "      document.getElementById('motion-box').style.borderColor = 'green';"
+              "    } else {"
+              "      document.getElementById('motion-box').innerText = 'Waiting for motion...';"
+              "      document.getElementById('motion-box').style.borderColor = 'white';"
+              "    }"
+              "  } else if (data.type === 'led') {"
+              "    toggleLed(data.state);"
+              "  } else if (data.type === 'alarm') {"
+              "    toggleAlarm(data.state);"
+              "  } else if (data.type === 'doors') {"
+              "    updateDoorStatus(data.state);"
+              "  }"
+              "};"
+              "function toggleLed(isOn) {"
+              "  const body = document.querySelector('body');"
+              "  if (isOn) {"
+              "    body.classList.add('on');"
+              "  } else {"
+              "    body.classList.remove('on');"
+              "  }"
+              "}"
+              "function toggleAlarm(isActive) {"
+              "  const alarmBox = document.getElementById('alarm-box');"
+              "  if (isActive) {"
+              "    alarmBox.classList.add('alarm-active');"
+              "    alarmBox.innerText = 'ALARM';"
+              "  } else {"
+              "    alarmBox.classList.remove('alarm-active');"
+              "    alarmBox.innerText = 'No Alarm';"
+              "  }"
+              "}"
+              "function updateDoorStatus(isOpened) {"
+              "  const doorBox = document.getElementById('doors-box');"
+              "  doorBox.innerText = isOpened ? 'Opened' : 'Closed';"
+              "  if (isOpened) {"
+              "    doorBox.classList.add('opened');"
+              "  } else {"
+              "    doorBox.classList.remove('opened');"
+              "  }"
+              "}"
+              "</script>"
+
+              "</body></html>");
 }
 
 
-// Funkcija za prikaz dodavanja korisnika
-void showAddUserPage(String alertMessage = "", bool success = false, String pinMessage = "") {
-    // Escape any double quotes in the alert message
-    String jsAlertMessage = alertMessage;
-    jsAlertMessage.replace("\"", "\\\"");
-    jsAlertMessage.replace("\n", "\\n");  // Handle newlines if any
-    jsAlertMessage.replace("\r", "");     // Remove carriage returns if any
+void showAddUserPage() {
+  // Set headers to prevent caching
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
 
-    // Set headers to prevent caching
-    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    server.sendHeader("Pragma", "no-cache");
-    server.sendHeader("Expires", "-1");
+  // Create the HTML content using R"rawliteral(...)"
+  String pageContent = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }
+        .login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .login-box { background-color: #1A4D8A; padding: 40px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 350px; }
+        .login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; font-size: 24px; }
+        .username-label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; }
+        .username-input-field { width: 143%; padding: 15px; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }
+        .input-error { border: 1px solid red; }
+        .error-message { color: red; font-size: 14px; margin-top: 10px; }
+        .captcha { display: flex; align-items: center; margin-top: 20px; justify-content: center;}
+        .captcha input[type='checkbox'] { width: 20px; height: 20px; margin-right: 10px; }
+        .captcha-error input[type='checkbox'] { outline: 2px solid red; }
+        .captcha label { color: #00d4ff; font-size: 16px; font-weight: bold; }
+        .captcha-error label { color: red; }
+        .add-fingerprint-button { width: 101%; padding: 15px; margin-top: 12px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; border: none; }
+        .add-fingerprint-button:hover { background-color: #00a3cc; }
+        .voice-command-label { color: #000000; font-size: 16px; margin-top: 15px; display: block; }
+        .dropdown { width: 101%; padding: 15px; margin-top: 5px; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }
+        .dropdown option { background-color: #112240; color: #ffffff; }
+        .add-user-button { width: 85%; padding: 15px; margin-top: 20px; margin-left: 29px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; border: none; }
+        .add-user-button:hover { background-color: #00a3cc; }
+        .back-button { width: 93%; padding: 15px; margin-top: 10px; background-color: #00d4ff; color: #ffffff; text-align: center; text-decoration: none; display: block; border-radius: 5px; font-size: 16px; }
+        .back-button:hover { background-color: #00a3cc; }
+        .username-tooltip { position: relative; display: inline-block; }
+        .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 160%; top: -30px; }
+        .username-tooltip:hover .tooltiptext { visibility: visible; }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-box">
+            <h1>Add User</h1>
+            <form id="addUserForm">
+                <!-- Username field with tooltip -->
+                <label for="username" class="username-label">Username:</label>
+                <div class="username-tooltip">
+                    <input type="text" name="username" id="username" class="username-input-field">
+                    <span class="tooltiptext">
+                        Username rules:<br>
+                        - Must start with a letter<br>
+                        - Only letters and numbers allowed<br>
+                        - No symbols or spaces
+                    </span>
+                </div>
+                <div id="username-error" class="error-message"></div>
 
-    server.send(200, "text/html",
-    "<html><head>"
-    "<style>"
-    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-    ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-    ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 350px; min-height: 200px; }"
-    ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; font-size: 24px; }"
+                <!-- Add Fingerprint button -->
+                <input type="button" value="Add Fingerprint" class="add-fingerprint-button"><br>
 
-    /* Username label styling */
-    ".username-label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; margin-top: 10px; }"
+                <!-- Voice Command dropdown -->
+                <label for="voice-command" class="voice-command-label">Voice command:</label>
+                <select name="voiceCommand" id="voice-command" class="dropdown">
+                    <option value="option1">Option 1</option>
+                    <option value="option2">Option 2</option>
+                    <option value="option3">Option 3</option>
+                    <option value="option4">Option 4</option>
+                    <option value="option5">Option 5</option>
+                    <option value="option6">Option 6</option>
+                    <option value="option7">Option 7</option>
+                </select>
 
-    /* Username input field styling */
-    ".username-input-field { width: 350px; padding: 15px; margin: 5px 0 15px 0; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
+                <!-- CAPTCHA section -->
+                <div class="captcha" id="captcha-section">
+                    <input type="checkbox" name="captcha" value="not_a_robot" id="captcha-checkbox">
+                    <label for="captcha-checkbox">I am not a robot</label>
+                </div>
 
-    /* Username tooltip styling */
-    ".username-tooltip { margin-bottom: 10px; }"
+                <!-- Submit button -->
+                <input type="submit" value="Add User" class="add-user-button">
+            </form>
 
-    /* Other styles remain the same */
-    ".add-fingerprint-button { width: 350px; padding: 15px; margin: 10px auto; margin-top: 5px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
-    ".add-fingerprint-button:hover { background-color: #00a3cc; }"
-    ".dropdown { width: 350px; padding: 15px; margin: 10px auto; margin-top: 10px; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
-    ".dropdown option { background-color: #112240; color: #ffffff; }"
-    ".add-user-button { width: 300px; padding: 15px; margin: 10px auto; margin-top: 20px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
-    ".add-user-button:hover { background-color: #00a3cc; }"
-    ".back-button { width: 320px; padding: 15px; margin: 10px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 15px; text-align: center; text-decoration: none; display: block; border: none; }"
-    ".back-button:hover { background-color: #00a3cc; }"
+            <!-- Back to Main Page link -->
+            <a href="/" class="back-button">Back to Main Page</a>
+        </div>
+    </div>
 
-    /* Tooltip styles */
-    ".tooltip { position: relative; display: inline-block; }"
-    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 105%; top: -30px; }"
-    ".tooltip:hover .tooltiptext { visibility: visible; }"
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var form = document.getElementById('addUserForm');
+            form.addEventListener('submit', function(event) {
+                event.preventDefault(); // Prevent default form submission
 
-    /* CAPTCHA styles */
-    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: 15px; }"
-    ".captcha input[type='checkbox'] { width: 20px; height: 20px; margin-right: 8px; }"
-    ".captcha label { color: #00d4ff; font-family: 'Roboto', sans-serif; font-size: 16px; font-weight: bold; }"
-    "</style>"
-    "<script>"
-    "window.onload = function() {"
-    "  var alertMessage = '" + jsAlertMessage + "';"
-    "  if (alertMessage !== '') {"
-    "    alert(alertMessage);"
-    "  }"
-    "  if (" + String(success) + " === 'true') {"
-    "    alert('New User Added Successfully! PIN: " + pinMessage + "');"
-    "  }"
-    "};"
-    "</script>"
-    "</head><body>"
-    "<div class='login-container'>"
-    "<div class='login-box'>"
-    "<h1>Add User</h1>"
-    "<form action='/addUser' method='POST'>"
-    // Username label with custom class
-    "<label for='username' class='username-label'>Username:</label>"
-    "<div class='tooltip username-tooltip'>"
-    // Username input field with custom class
-    "<input type='text' name='username' id='username' class='username-input-field'>"
-    "<span class='tooltiptext'>"
-    "Username rules:<br>"
-    "- Must start with a letter<br>"
-    "- Only letters and numbers allowed<br>"
-    "- No symbols or spaces"
-    "</span>"
-    "</div><br>"
-    // Add Fingerprint button
-    "<input type='button' value='Add Fingerprint' class='add-fingerprint-button'><br>"
-    // Voice command label and dropdown menu
-    "<label for='voice-command' class='voice-command-label'>Voice command:</label>"
-    "<select name='options' id='voice-command' class='dropdown'>"
-    "<option value='option1'>Option 1</option>"
-    "<option value='option2'>Option 2</option>"
-    "<option value='option3'>Option 3</option>"
-    "<option value='option4'>Option 4</option>"
-    "<option value='option5'>Option 5</option>"
-    "<option value='option6'>Option 6</option>"
-    "<option value='option7'>Option 7</option>"
-    "</select><br>"
-    // CAPTCHA section
-    "<div class='captcha'>"
-    "<input type='checkbox' name='captcha' value='not_a_robot'>"
-    "<label for='captcha'>I am not a robot</label>"
-    "</div>"
-    // Add User button
-    "<input type='submit' value='Add User' class='add-user-button'>"
-    "</form>"
-    // Back to Main Page button
-    "<a href='/' class='back-button'>Back to Main Page</a>"
-    "</div></div>"
-    "</body></html>");
+                // Collect form data
+                var formData = new FormData(form);
+
+                // Send form data via AJAX
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/addUser', true);
+
+                xhr.onload = function() {
+                    if (xhr.status === 200) {
+                        var response = JSON.parse(xhr.responseText);
+
+                        // Clear previous error messages
+                        clearErrorMessages();
+
+                        if (response.success) {
+                            alert('New User Added Successfully! PIN: ' + response.pin);
+                            form.reset(); // Reset form fields
+                        } else {
+                            displayErrorMessages(response.errors);
+                        }
+                    } else {
+                        alert('An error occurred while processing your request.');
+                    }
+                };
+
+                xhr.send(formData);
+            });
+
+            function clearErrorMessages() {
+                // Remove error messages and styles
+                var usernameError = document.getElementById('username-error');
+                usernameError.innerText = '';
+
+                var usernameField = document.getElementById('username');
+                usernameField.classList.remove('input-error');
+
+                var captchaSection = document.getElementById('captcha-section');
+                captchaSection.classList.remove('captcha-error');
+
+                var captchaLabel = document.querySelector('.captcha label');
+                captchaLabel.classList.remove('captcha-error-label');
+            }
+
+            function displayErrorMessages(errors) {
+                if (errors.username) {
+                    var usernameError = document.getElementById('username-error');
+                    usernameError.innerText = errors.username;
+
+                    var usernameField = document.getElementById('username');
+                    usernameField.classList.add('input-error');
+                }
+
+                if (errors.captcha) {
+                    var captchaSection = document.getElementById('captcha-section');
+                    captchaSection.classList.add('captcha-error');
+                }
+            }
+        });
+    </script>
+</body>
+</html>
+    )rawliteral";
+
+  server.send(200, "text/html", pageContent);
 }
 
 
 
 // Funkcija za obradu logovanja
 void handleLogin() {
-    if (server.hasArg("username") && server.hasArg("password")) {
-        String enteredUsername = server.arg("username");
-        String enteredPassword = server.arg("password");
+  if (server.hasArg("username") && server.hasArg("password")) {
+    String enteredUsername = server.arg("username");
+    String enteredPassword = server.arg("password");
 
-        bool userExists = false;
-        bool passwordCorrect = false;
+    bool userExists = false;
+    bool passwordCorrect = false;
 
-        for (User &u : users) {
-            if (u.username == enteredUsername) {
-                userExists = true;
-                if (u.password == enteredPassword) {
-                    passwordCorrect = true;
-                    loggedIn = true;  // Korisnik je sada ulogovan
-                    loggedInUser = u;
-                    break;
-                }
-            }
+    for (User &u : users) {
+      if (u.username == enteredUsername) {
+        userExists = true;
+        if (u.pin == enteredPassword) {
+          passwordCorrect = true;
+          loggedIn = true;  // Korisnik je sada ulogovan
+          loggedInUser = u;
+          break;
         }
-
-        if (!userExists || !passwordCorrect) {
-            loginFailed = true;  // Postavi da je login neuspešan
-            showLoginPage();  // Prikaz login stranice sa porukom o grešci
-        } else {
-            // Preusmeravanje na korisničku ili admin stranicu
-            if (loggedInUser.username == "admin") {
-                showAdminPage();  // Idi na admin panel ako je korisnik admin
-            } else {
-                showUserPage();  // Idi na korisničku stranicu ako nije admin
-            }
-
-            // Pošalji trenutne statuse svim komponentama korisniku koji se upravo ulogovao
-            if (loggedInClientNum != -1) {
-                sendAllStatusesToClient(loggedInClientNum);
-            }
-        }
+      }
     }
+
+    if (!userExists || !passwordCorrect) {
+      loginFailed = true;  // Postavi da je login neuspešan
+      showLoginPage();  // Prikaz login stranice sa porukom o grešci
+    } else {
+      // Preusmeravanje na korisničku ili admin stranicu
+      if (loggedInUser.username == "admin") {
+        showAdminPage();  // Idi na admin panel ako je korisnik admin
+      } else {
+        showUserPage();  // Idi na korisničku stranicu ako nije admin
+      }
+
+      // Pošalji trenutne statuse svim komponentama korisniku koji se upravo ulogovao
+      if (loggedInClientNum != -1) {
+        sendAllStatusesToClient(loggedInClientNum);
+      }
+    }
+  }
 }
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
-    // Check if CAPTCHA is confirmed
-    if (!server.hasArg("captcha")) {
-        showAddUserPage("Please confirm you are not a robot.");
-        return;
-    }
+  DynamicJsonDocument jsonResponse(1024);
+  JsonObject errors = jsonResponse.createNestedObject("errors");
+  bool success = true;
 
-    // Check if username is provided
-    if (!server.hasArg("username")) {
-        showAddUserPage("Please enter a username.");
-        return;
-    }
+  String enteredUsername = server.arg("username");
 
-    String newUsername = server.arg("username");
+  // Validacija CAPTCHA
+  if (!server.hasArg("captcha")) {
+    errors["captcha"] = true;
+    success = false;
+  }
 
-    // Check if the username already exists
+  // Validacija korisničkog imena
+  if (enteredUsername == "") {
+    errors["username"] = "Please enter a username.";
+    success = false;
+  } else if (!isValidUsername(enteredUsername)) {
+    errors["username"] = "Invalid username! Please follow the rules.";
+    success = false;
+  } else {
+    // Provera da li korisnik već postoji
     bool userExists = false;
     for (User &u : users) {
-        if (u.username == newUsername) {
-            userExists = true;
-            break;
-        }
+      if (u.username == enteredUsername) {
+        userExists = true;
+        break;
+      }
     }
-
     if (userExists) {
-        // If username already exists, show error message
-        showAddUserPage("Error: User already exists!");
-    } else if (!isValidUsername(newUsername)) {
-        // If username is invalid, show error message
-        showAddUserPage("Invalid username! Please follow the rules.");
-    } else {
-        // Generate a unique PIN
-        String newPin = generateUniquePin();
-
-        // Add new user with generated PIN
-        User newUser = {newUsername, newPin};
-        users.push_back(newUser);
-
-        // Save the new user to the file
-        saveUserToFile(newUsername, newPin);
-
-        // Show the add user page with a success message
-        showAddUserPage("", true, newPin);
+      errors["username"] = "Error: User already exists!";
+      success = false;
     }
+  }
+
+  if (!success) {
+    jsonResponse["success"] = false;
+    String response;
+    serializeJson(jsonResponse, response);
+    server.send(200, "application/json", response);
+    return;
+  }
+
+  // Ako je validacija uspešna, dodajte korisnika
+  String newPin = generateUniquePin();
+  User newUser = {enteredUsername, newPin};
+  users.push_back(newUser);
+  saveUserToFile(enteredUsername, newPin);
+
+  // Vratite odgovor o uspehu
+  jsonResponse["success"] = true;
+  jsonResponse["pin"] = newPin;
+  String response;
+  serializeJson(jsonResponse, response);
+  server.send(200, "application/json", response);
 }
+
 
 
 
 // Funkcija za generisanje jedinstvenog PIN-a
 String generateUniquePin() {
-  String pin = "";
-  for (int i = 0; i < 4; i++) {
-    pin += String(random(0, 10));  // Generiši PIN od 4 cifre
+  String pin;
+  bool unique = false;
+
+  while (!unique) {
+    // Generišite nasumičan PIN od 4 cifre
+    pin = String(random(1000, 9999));
+
+    // Proverite da li PIN već postoji
+    unique = true;
+    for (User &u : users) {
+      if (u.pin == pin) {
+        unique = false;
+        break;
+      }
+    }
   }
+
   return pin;
 }
 
+
 // Funkcija za validaciju username-a
-bool isValidUsername(String username) {
-  if (username.length() == 0) return false;
-  if (!isAlpha(username[0])) return false;
-  for (int i = 0; i < username.length(); i++) {
-    if (!isAlphaNumeric(username[i])) return false;
+bool isValidUsername(const String& username) {
+  if (username.length() == 0) {
+    return false;
   }
+
+  // Provera da li prvo slovo jeste slovo
+  if (!isalpha(username.charAt(0))) {
+    return false;
+  }
+
+  // Provera da li su svi karakteri slova ili brojevi
+  for (size_t i = 0; i < username.length(); i++) {
+    char c = username.charAt(i);
+    if (!isalnum(c)) {
+      return false;
+    }
+  }
+
   return true;
 }
+
 
 // Funkcija za validaciju password-a
 bool isValidPassword(String password) {
@@ -819,8 +1046,8 @@ void handleUserDeletion() {
     // Ne dozvoli brisanje admin korisnika
     if (usernameToDelete == "admin") {
       server.send(200, "text/html",
-      "<html><body><script>alert('Admin user cannot be deleted!');</script>"
-      "<meta http-equiv='refresh' content='0;url=/' /></body></html>");
+                  "<html><body><script>alert('Admin user cannot be deleted!');</script>"
+                  "<meta http-equiv='refresh' content='0;url=/' /></body></html>");
       return;
     }
 
@@ -842,16 +1069,14 @@ void handleUserDeletion() {
 // Funkcija za prikaz admin panela
 void showAdminPage() {
   if (!loggedIn || loggedInUser.username != "admin") {
-    // Ako korisnik nije prijavljen ili nije admin, preusmeri ga na login
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
     server.send(200, "text/html",
-    "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+                "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
     return;
   }
 
-  // Prikaz admin stranice ako je prijavljen kao admin
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "-1");
@@ -873,18 +1098,21 @@ void showAdminPage() {
                 "<div class='container'><h1>Admin Panel</h1>"
                 "<table><tr><th>Username</th><th>Action</th></tr>";
 
+  // Prikaz admin korisnika prvo
+  page += "<tr><td>admin</td><td>Default User</td></tr>";
+
+  // Prikaz ostalih korisnika
   for (User &user : users) {
-    page += "<tr><td>" + user.username + "</td>";
     if (user.username != "admin") {
-      page += "<td><a href='/delete?username=" + user.username + "'><button class='delete-button'>Delete</button></a></td></tr>";
-    } else {
-      page += "<td>Default User</td></tr>";
+      page += "<tr><td>" + user.username + "</td>"
+              "<td><a href='/delete?username=" + user.username + "'><button class='delete-button'>Delete</button></a></td></tr>";
     }
   }
 
   page += "</table><a href='/logout'><button class='logout-button'>Logout</button></a></div></body></html>";
   server.send(200, "text/html", page);
 }
+
 
 
 // Funkcija za odjavu korisnika
@@ -904,6 +1132,8 @@ void handleLogout() {
 
 void setup() {
   Serial.begin(115200);
+  randomSeed(analogRead(0));
+
 
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);  // Podesi vremensku zonu za Centralnoevropsko vreme (CET)
@@ -914,7 +1144,7 @@ void setup() {
     return;
   }
 
-   // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
+  // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
   initializeUserFile();
 
   // Učitavanje korisnika iz fajla pri pokretanju
@@ -924,7 +1154,7 @@ void setup() {
   pinMode(blueLedPin, OUTPUT);  // Plava LED dioda na GPIO 2
   pinMode(pirPin, INPUT);       // PIR senzor
 
- // Inicijalizacija OLED-a
+  // Inicijalizacija OLED-a
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("OLED nije pronađen"));
     for (;;);
@@ -954,19 +1184,18 @@ void setup() {
 
   // Servo setup
   ESP32PWM::allocateTimer(0);
-  myservo.setPeriodHertz(50);  
-  myservo.attach(servoPin, 1000, 2000); 
+  myservo.setPeriodHertz(50);
+  myservo.attach(servoPin, 1000, 2000);
 
- // Handleri za različite URL-ove
-  server.on("/", showMainPage);  // Glavni prozor sa dugmadima
-  server.on("/loginPage", showLoginPage);  // Login prozor
-  server.on("/addUserPage", []() {
-        showAddUserPage();  // Poziva showAddUserPage bez argumenata
-    });
+  // Handleri za različite URL-ove
+  server.on("/", showMainPage);              // Main page
+  server.on("/loginPage", showLoginPage);    // Login page
+  // Ruta za Add User stranicu (GET zahtev)
+  server.on("/addUserPage", HTTP_GET, showAddUserPage);
 
+  // Ruta za obradu Add User forme (POST zahtev)
   server.on("/addUser", HTTP_POST, handleAddUser);
   server.on("/login", HTTP_POST, handleLogin);
-  server.on("/addUser", HTTP_POST, handleAddUser);
   server.on("/delete", HTTP_GET, handleUserDeletion);
   server.on("/logout", HTTP_GET, handleLogout);
 }
@@ -974,7 +1203,7 @@ void setup() {
 void loop() {
   // Obrada klijent server zahteva
   server.handleClient();
-  
+
   // Detekcija pokreta i upravljanje LED diodom i OLED ekranom
   handlePIRSensor();
 
@@ -985,7 +1214,7 @@ void loop() {
   webSocket.loop();
 
   // Ako je korisnik ulogovan, pošalji sva trenutna stanja
-    if (loggedInClientNum != -1) {
-        sendAllStatusesToClient(loggedInClientNum);
-    }
+  if (loggedInClientNum != -1) {
+    sendAllStatusesToClient(loggedInClientNum);
+  }
 }
