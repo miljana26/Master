@@ -575,12 +575,11 @@ void showUserPage() {
 
 // Funkcija za prikaz dodavanja korisnika
 void showAddUserPage(String alertMessage = "") {
-    String message = "";
-    String alertMessageText = "";
-    if (userAdded) {
-        alertMessageText = "New User Added, Unique PIN: " + lastGeneratedPin;
-        userAdded = false;  // Reset status after showing message
-    }
+    // Escape any double quotes in the alert message
+    String jsAlertMessage = alertMessage;
+    jsAlertMessage.replace("\"", "\\\"");
+    jsAlertMessage.replace("\n", "\\n");  // Handle newlines if any
+    jsAlertMessage.replace("\r", "");     // Remove carriage returns if any
 
     // Set headers to prevent caching
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -598,25 +597,27 @@ void showAddUserPage(String alertMessage = "") {
     ".username-input { width: 350px; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
     ".add-fingerprint-button { width: 350px; padding: 15px; margin: 10px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
     ".add-fingerprint-button:hover { background-color: #00a3cc; }"
-    ".add-user-button { width: 300px; padding: 15px; margin: 10px auto; margin-top: 40px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
+    ".dropdown { width: 350px; padding: 15px; margin: 0px auto; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
+    ".dropdown option { background-color: #112240; color: #ffffff; }"
+    ".add-user-button { width: 300px; padding: 15px; margin: 10px auto; margin-top: 25px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
     ".add-user-button:hover { background-color: #00a3cc; }"
-    ".back-button { width: 320px; padding: 15px; margin: 10px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; border: none; }"
+    ".back-button { width: 320px; padding: 18px; margin: 5px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; border: none; }"
     ".back-button:hover { background-color: #00a3cc; }"
 
     /* Tooltip styles */
     ".tooltip { position: relative; display: inline-block; }"
-    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 105%; top: -17px; }"
+    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 105%; top: -16px; }"
     ".tooltip:hover .tooltiptext { visibility: visible; }"
 
     /* CAPTCHA styles */
-    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: -5px; }"
+    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: 20px; }"
     ".captcha input[type='checkbox'] { width: 20px; height: 20px; margin-right: 8px; }"
     ".captcha label { color: #00d4ff; font-family: 'Roboto', sans-serif; font-size: 16px; font-weight: bold; }"
     "</style>"
     "<script>"
     "window.onload = function() {"
-    "  var alertMessage = '" + (alertMessageText != "" ? alertMessageText : alertMessage) + "';"
-    "  if (alertMessage !== '') {"
+    "  var alertMessage = \"" + jsAlertMessage + "\";"
+    "  if (alertMessage !== \"\") {"
     "    alert(alertMessage);"
     "  }"
     "};"
@@ -637,6 +638,16 @@ void showAddUserPage(String alertMessage = "") {
     "</span>"
     "</div><br>"
     "<input type='button' value='Add Fingerprint' class='add-fingerprint-button'><br>"
+    // Added scroll box (dropdown menu) with 7 items
+    "<select name='options' class='dropdown'>"
+    "<option value='option1'>Option 1</option>"
+    "<option value='option2'>Option 2</option>"
+    "<option value='option3'>Option 3</option>"
+    "<option value='option4'>Option 4</option>"
+    "<option value='option5'>Option 5</option>"
+    "<option value='option6'>Option 6</option>"
+    "<option value='option7'>Option 7</option>"
+    "</select><br>"
     "<div class='captcha'>"
     "<input type='checkbox' name='captcha' value='not_a_robot'>"
     "<label for='captcha'>I am not a robot</label>"
@@ -647,6 +658,8 @@ void showAddUserPage(String alertMessage = "") {
     "</div></div>"
     "</body></html>");
 }
+
+
 
 
 
@@ -692,41 +705,57 @@ void handleLogin() {
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
-    if (server.hasArg("username") && server.hasArg("captcha")) {  // Check if CAPTCHA is confirmed
-        String newUsername = server.arg("username");
+    // Check if the user is logged in
+    if (!loggedIn) {
+        // Display the add user page with an unauthorized access alert
+        showAddUserPage("Unauthorized access! Please log in.");
+        return;
+    }
 
-        bool userExists = false;
-        for (User &u : users) {
-            if (u.username == newUsername) {
-                userExists = true;
-                break;
-            }
+    // Check if CAPTCHA is confirmed
+    if (!server.hasArg("captcha")) {
+        showAddUserPage("Please confirm you are not a robot.");
+        return;
+    }
+
+    // Check if username is provided
+    if (!server.hasArg("username")) {
+        showAddUserPage("Please enter a username.");
+        return;
+    }
+
+    String newUsername = server.arg("username");
+
+    // Check if the username already exists
+    bool userExists = false;
+    for (User &u : users) {
+        if (u.username == newUsername) {
+            userExists = true;
+            break;
         }
+    }
 
-        if (!userExists && isValidUsername(newUsername)) {  // Check if user already exists
-            // Generate a unique PIN
-            String newPin = generateUniquePin();
-
-            // Add new user with generated PIN
-            User newUser = {newUsername, newPin};
-            users.push_back(newUser);
-            userAdded = true;
-            lastGeneratedPin = newPin;  // Save the generated PIN for display
-
-            // Save the new user to the file
-            saveUserToFile(newUsername, newPin);
-
-            showAddUserPage("User added successfully!");  // Show page after adding user
-        } else if (userExists) {  // If username already exists
-            showAddUserPage("Error: User already exists!");  // Show error message
-        } else {
-            showAddUserPage("Invalid username!");  // Show invalid username message
-        }
+    if (userExists) {
+        // If username already exists, show error message
+        showAddUserPage("Error: User already exists!");
+    } else if (!isValidUsername(newUsername)) {
+        // If username is invalid, show error message
+        showAddUserPage("Invalid username!");
     } else {
-        showAddUserPage("Please confirm you are not a robot.");  // Show CAPTCHA message
+        // Generate a unique PIN
+        String newPin = generateUniquePin();
+
+        // Add new user with generated PIN
+        User newUser = {newUsername, newPin};
+        users.push_back(newUser);
+
+        // Save the new user to the file
+        saveUserToFile(newUsername, newPin);
+
+        // Show the add user page with a success message
+        showAddUserPage("New User Added, Unique PIN: " + newPin);
     }
 }
-
 
 
 
