@@ -207,16 +207,18 @@ void handlePIRSensor() {
     int pirState = digitalRead(pirPin);
     unsigned long currentTime = millis();
 
+    // Provera promene stanja PIR senzora
     if (pirState != lastPirState) {
         lastPirReadTime = currentTime;
     }
 
+    // Debounce period i detekcija pokreta
     if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
         Serial.println("Pokret je detektovan!");
         String detectionTime = getFormattedTime();
-        pirActivationTime = millis();
-        ledTurnOnTime = millis();
-        digitalWrite(ledPin, HIGH);
+        pirActivationTime = millis();  // Beleženje vremena detekcije pokreta
+        ledTurnOnTime = millis();  // Beleženje vremena kada je LED uključena
+        digitalWrite(ledPin, HIGH);  // Uključi LED
         ledState = true;
         motionState = true;
 
@@ -227,12 +229,19 @@ void handlePIRSensor() {
         display.print(detectionTime);
         display.display();
 
-        isEnteringPin = true;
-        isWaitingForMotion = false;
+        isEnteringPin = true;  // Pokrenut unos PIN-a
+        isWaitingForMotion = false;  // Prestanak čekanja na pokret
+    }
+
+    // Provera da li je prošlo 3 minuta bez unosa šifre (isključivanje LED)
+    if (ledState && (millis() - ledTurnOnTime > ledOnTimeout)) {
+        Serial.println("Prošlo je 3 minuta, LED se isključuje.");
+        resetPIRDetection();  // Resetuje sistem i vraća u stanje čekanja pokreta
     }
 
     lastPirState = pirState;
 }
+
 
 void resetPIRDetection() {
     digitalWrite(ledPin, LOW);
@@ -574,7 +583,7 @@ void showUserPage() {
 
 
 // Funkcija za prikaz dodavanja korisnika
-void showAddUserPage(String alertMessage = "") {
+void showAddUserPage(String alertMessage = "", bool success = false, String pinMessage = "") {
     // Escape any double quotes in the alert message
     String jsAlertMessage = alertMessage;
     jsAlertMessage.replace("\"", "\\\"");
@@ -593,32 +602,44 @@ void showAddUserPage(String alertMessage = "") {
     ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
     ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 350px; min-height: 200px; }"
     ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 20px; font-size: 24px; }"
-    ".login-box label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; }"
-    ".username-input { width: 350px; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
-    ".add-fingerprint-button { width: 350px; padding: 15px; margin: 10px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
+
+    /* Username label styling */
+    ".username-label { color: #000000; font-size: 16px; margin-bottom: 5px; display: block; margin-top: 10px; }"
+
+    /* Username input field styling */
+    ".username-input-field { width: 350px; padding: 15px; margin: 5px 0 15px 0; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
+
+    /* Username tooltip styling */
+    ".username-tooltip { margin-bottom: 10px; }"
+
+    /* Other styles remain the same */
+    ".add-fingerprint-button { width: 350px; padding: 15px; margin: 10px auto; margin-top: 5px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
     ".add-fingerprint-button:hover { background-color: #00a3cc; }"
-    ".dropdown { width: 350px; padding: 15px; margin: 0px auto; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
+    ".dropdown { width: 350px; padding: 15px; margin: 10px auto; margin-top: 10px; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }"
     ".dropdown option { background-color: #112240; color: #ffffff; }"
-    ".add-user-button { width: 300px; padding: 15px; margin: 10px auto; margin-top: 25px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
+    ".add-user-button { width: 300px; padding: 15px; margin: 10px auto; margin-top: 20px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; display: block; border: none; }"
     ".add-user-button:hover { background-color: #00a3cc; }"
-    ".back-button { width: 320px; padding: 18px; margin: 5px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; border: none; }"
+    ".back-button { width: 320px; padding: 15px; margin: 10px auto; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 15px; text-align: center; text-decoration: none; display: block; border: none; }"
     ".back-button:hover { background-color: #00a3cc; }"
 
     /* Tooltip styles */
     ".tooltip { position: relative; display: inline-block; }"
-    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 105%; top: -16px; }"
+    ".tooltip .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 105%; top: -30px; }"
     ".tooltip:hover .tooltiptext { visibility: visible; }"
 
     /* CAPTCHA styles */
-    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: 20px; }"
+    ".captcha { display: flex; align-items: center; justify-content: center; margin-top: 15px; }"
     ".captcha input[type='checkbox'] { width: 20px; height: 20px; margin-right: 8px; }"
     ".captcha label { color: #00d4ff; font-family: 'Roboto', sans-serif; font-size: 16px; font-weight: bold; }"
     "</style>"
     "<script>"
     "window.onload = function() {"
-    "  var alertMessage = \"" + jsAlertMessage + "\";"
-    "  if (alertMessage !== \"\") {"
+    "  var alertMessage = '" + jsAlertMessage + "';"
+    "  if (alertMessage !== '') {"
     "    alert(alertMessage);"
+    "  }"
+    "  if (" + String(success) + " === 'true') {"
+    "    alert('New User Added Successfully! PIN: " + pinMessage + "');"
     "  }"
     "};"
     "</script>"
@@ -627,9 +648,11 @@ void showAddUserPage(String alertMessage = "") {
     "<div class='login-box'>"
     "<h1>Add User</h1>"
     "<form action='/addUser' method='POST'>"
-    "<label for='username'>Username:</label>"
-    "<div class='tooltip'>"
-    "<input type='text' name='username' id='username' class='username-input'>"
+    // Username label with custom class
+    "<label for='username' class='username-label'>Username:</label>"
+    "<div class='tooltip username-tooltip'>"
+    // Username input field with custom class
+    "<input type='text' name='username' id='username' class='username-input-field'>"
     "<span class='tooltiptext'>"
     "Username rules:<br>"
     "- Must start with a letter<br>"
@@ -637,9 +660,11 @@ void showAddUserPage(String alertMessage = "") {
     "- No symbols or spaces"
     "</span>"
     "</div><br>"
+    // Add Fingerprint button
     "<input type='button' value='Add Fingerprint' class='add-fingerprint-button'><br>"
-    // Added scroll box (dropdown menu) with 7 items
-    "<select name='options' class='dropdown'>"
+    // Voice command label and dropdown menu
+    "<label for='voice-command' class='voice-command-label'>Voice command:</label>"
+    "<select name='options' id='voice-command' class='dropdown'>"
     "<option value='option1'>Option 1</option>"
     "<option value='option2'>Option 2</option>"
     "<option value='option3'>Option 3</option>"
@@ -648,18 +673,19 @@ void showAddUserPage(String alertMessage = "") {
     "<option value='option6'>Option 6</option>"
     "<option value='option7'>Option 7</option>"
     "</select><br>"
+    // CAPTCHA section
     "<div class='captcha'>"
     "<input type='checkbox' name='captcha' value='not_a_robot'>"
     "<label for='captcha'>I am not a robot</label>"
     "</div>"
+    // Add User button
     "<input type='submit' value='Add User' class='add-user-button'>"
     "</form>"
+    // Back to Main Page button
     "<a href='/' class='back-button'>Back to Main Page</a>"
     "</div></div>"
     "</body></html>");
 }
-
-
 
 
 
@@ -705,13 +731,6 @@ void handleLogin() {
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
-    // Check if the user is logged in
-    if (!loggedIn) {
-        // Display the add user page with an unauthorized access alert
-        showAddUserPage("Unauthorized access! Please log in.");
-        return;
-    }
-
     // Check if CAPTCHA is confirmed
     if (!server.hasArg("captcha")) {
         showAddUserPage("Please confirm you are not a robot.");
@@ -740,7 +759,7 @@ void handleAddUser() {
         showAddUserPage("Error: User already exists!");
     } else if (!isValidUsername(newUsername)) {
         // If username is invalid, show error message
-        showAddUserPage("Invalid username!");
+        showAddUserPage("Invalid username! Please follow the rules.");
     } else {
         // Generate a unique PIN
         String newPin = generateUniquePin();
@@ -753,7 +772,7 @@ void handleAddUser() {
         saveUserToFile(newUsername, newPin);
 
         // Show the add user page with a success message
-        showAddUserPage("New User Added, Unique PIN: " + newPin);
+        showAddUserPage("", true, newPin);
     }
 }
 
