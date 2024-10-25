@@ -9,6 +9,7 @@
 #include <WebSocketsServer.h>
 #include <time.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
 
 
 
@@ -19,6 +20,8 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 const char *ssid = "MS";
 const char *password = "zastomezezas";
+const char* telegramToken = "7454592874:AAE7dneypwpAgrV2GxIsEVole_JwEyjh9RE";  // Bot tokenom
+const char* chatId = "8017471176";  // chat_id korisnika
 
 // Struktura za login korisnika
 struct User {
@@ -89,6 +92,21 @@ unsigned long pirActivationTime = 0;
 const unsigned long pirTimeout = 180000;  // 3 minuta timeout
 
 
+void sendTelegramMessage(const String& message) {
+    HTTPClient http;
+    String url = "https://api.telegram.org/bot" + String(telegramToken) + "/sendMessage?chat_id=" + chatId + "&text=" + message;
+
+    http.begin(url);
+    int httpResponseCode = http.GET();
+
+    if (httpResponseCode > 0) {
+        Serial.printf("Telegram message sent. Response code: %d\n", httpResponseCode);
+    } else {
+        Serial.printf("Error sending Telegram message. Response code: %d\n", httpResponseCode);
+    }
+
+    http.end();
+}
 
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
@@ -362,27 +380,28 @@ void moveServo() {
 
 
 void activateErrorLED() {
-  digitalWrite(blueLedPin, HIGH);
-  alarmState = true;  // Ažuriraj stanje alarma
+    digitalWrite(blueLedPin, HIGH);  
+    alarmState = true;  // Ažuriraj stanje alarma
 
-  // Pošalji novo stanje alarma klijentu
-  if (loggedInClientNum != -1) {
-    String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":true}";
-    webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
-  }
+    // Pošalji Telegram poruku kada se alarm uključi
+    sendTelegramMessage("Alarm je uključen!");
 
-  delay(5000);
-  digitalWrite(blueLedPin, LOW);
-  alarmState = false;  // Ažuriraj stanje alarma
+    // Pošalji novo stanje alarma klijentu
+    if (loggedInClientNum != -1) {
+        String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":true}";
+        webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
+    }
 
-  // Pošalji novo stanje alarma klijentu
-  if (loggedInClientNum != -1) {
-    String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":false}";
-    webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
-  }
+    delay(5000);  
+    digitalWrite(blueLedPin, LOW);
+    alarmState = false;  // Ažuriraj stanje alarma
+
+    // Pošalji novo stanje alarma klijentu
+    if (loggedInClientNum != -1) {
+        String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":false}";
+        webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
+    }
 }
-
-
 
 
 
@@ -1217,4 +1236,5 @@ void loop() {
   if (loggedInClientNum != -1) {
     sendAllStatusesToClient(loggedInClientNum);
   }
+
 }
