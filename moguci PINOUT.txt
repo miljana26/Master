@@ -6,7 +6,7 @@ Servo motor									GPIO 18
 Fingerprint Sensor (TX - RX komunikacija)	GPIO 17 (RX2), GPIO 16 (TX2)
 Voice Recognition Sensor (I2C - SDA/SCL)	GPIO 21 (SDA), GPIO 22 (SCL)
 OLED										GPIO 21 (SDA), GPIO 22 (SCL)
-LED kontrola (GPIO za LED)					GPIO 2
+LED kontrola (GPIO za LED)					GPIO 5
 
 
 Ovo omogućava da sve komponente budu ispravno povezane i da ne dođe do sukoba pinova. Proveri samo da su svi UART pinovi ispravno podešeni u softveru za ESP32.
