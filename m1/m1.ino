@@ -772,6 +772,21 @@ void showAddUserPage() {
         .username-tooltip { position: relative; display: inline-block; }
         .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 160%; top: -30px; }
         .username-tooltip:hover .tooltiptext { visibility: visible; }
+
+         /* Stilovi za krug napretka */
+        @keyframes progress { 0% { --percentage: 0; } 100% { --percentage: var(--value); } }
+        @property --percentage { syntax: '<number>'; inherits: true; initial-value: 0; }
+        [role="progressbar"] { --percentage: var(--value); --primary: #369; --secondary: #adf; --size: 150px; animation: progress 2s 0.5s forwards; width: var(--size); aspect-ratio: 1; border-radius: 50%; position: relative; overflow: hidden; display: grid; place-items: center; box-shadow: 0 0 20px rgba(0, 255, 255, 0.4); } 
+        [role="progressbar"]::before { content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: conic-gradient(var(--primary) calc(var(--percentage) * 1%), var(--secondary) 0); mask: radial-gradient(white 55%, transparent 0); mask-mode: alpha; -webkit-mask: radial-gradient(#0000 55%, #000 0); -webkit-mask-mode: alpha; } 
+        [role="progressbar"]::after { counter-reset: percentage var(--value); content: counter(percentage) '%'; font-family: Helvetica, Arial, sans-serif; font-size: calc(var(--size) / 5); color: var(--primary); }
+
+        .modal { display: none; flex-direction: column; justify-content: center; align-items: center; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 250px; height: 250px; background-color: #1A4D8A; border-radius: 15px; padding: 20px; text-align: center; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); color: #00d4ff; }
+        
+        .close-button { margin-top: 15px; padding: 10px 20px; background-color: #00d4ff; color: #ffffff; border: none; border-radius: 5px; cursor: pointer; }
+        
+        .close-button:hover { background-color: #00a3cc; }
+
+    </style>
     </style>
 </head>
 <body>
@@ -793,7 +808,7 @@ void showAddUserPage() {
                 <div id="username-error" class="error-message"></div>
 
                 <!-- Add Fingerprint button -->
-                <input type="button" value="Add Fingerprint" class="add-fingerprint-button"><br>
+                <input type="button" value="Add Fingerprint" class="add-fingerprint-button" onclick="showFingerprintModal()"><br>
 
                 <!-- Voice Command dropdown -->
                 <label for="voice-command" class="voice-command-label">Voice command:</label>
@@ -821,8 +836,45 @@ void showAddUserPage() {
             <a href="/" class="back-button">Back to Main Page</a>
         </div>
     </div>
+    
+        <!-- Modal za registraciju otiska prsta -->
+    <div id="fingerprint-modal" class="modal">
+        <p id="fingerprint-status">Registering Fingerprint...</p>
+        <div role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" style="--value: 0"></div>
+        <button class="close-button" onclick="closeFingerprintModal()">Close</button>
+    </div>
+
+
 
     <script>
+
+        function showFingerprintModal() {
+            const progressBar = document.querySelector('[role="progressbar"]');
+            progressBar.style.setProperty('--value', 0); // Postavi vrednost na 0 pre početka
+            document.getElementById('fingerprint-modal').style.display = 'flex';
+            animateProgress();
+        }
+        
+        function closeFingerprintModal() {
+            document.getElementById('fingerprint-modal').style.display = 'none';
+        }
+        
+        function animateProgress() {
+            const progressBar = document.querySelector('[role="progressbar"]');
+            let value = 0;
+            const interval = setInterval(() => {
+                if (value >= 100) {
+                    clearInterval(interval);
+                    //closeFingerprintModal(); // Automatski zatvori modal kada dođe do 100%
+                } else {
+                    value += 1;
+                    progressBar.style.setProperty('--value', value);
+                    progressBar.setAttribute('aria-valuenow', value);
+                }
+            }, 50); // Možete prilagoditi brzinu animacije ovde
+        }
+      
+              
         document.addEventListener('DOMContentLoaded', function() {
             var form = document.getElementById('addUserForm');
             form.addEventListener('submit', function(event) {
@@ -893,6 +945,7 @@ void showAddUserPage() {
 
   server.send(200, "text/html", pageContent);
 }
+
 
 
 
