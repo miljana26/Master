@@ -64,6 +64,13 @@ bool alarmState = false;  // Trenutno stanje alarma
 bool doorState = false;  // Trenutno stanje vrata (zatvorena ili otvorena)
 uint8_t loggedInClientNum = -1;  // Promenljiva za čuvanje identifikatora ulogovanog klijenta
 String motionDetectedTime = "";  // Za čuvanje vremena detekcije pokreta
+int currentStep = 0;  // Globalna promenljiva za praćenje koraka
+bool noFingerMessageShown = false;
+bool registrationActive = false;
+bool fingerprintAdded = false;  // Praćenje statusa otiska prsta
+int id = 0;  // Globalna promenljiva za ID otiska prsta
+
+
 
 HardwareSerial mySerial(2); // Koristi Serial2 za komunikaciju sa senzorom
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
@@ -119,13 +126,24 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
   if (type == WStype_CONNECTED) {
     Serial.printf("[%u] Connected!\n", num);
     loggedInClientNum = num;  // Sačuvaj identifikator povezanog klijenta
-  } else if (type == WStype_DISCONNECTED) {
+  } 
+  else if (type == WStype_DISCONNECTED) {
     Serial.printf("[%u] Disconnected!\n", num);
     if (num == loggedInClientNum) {
       loggedInClientNum = -1;  // Resetuj identifikator ako se taj klijent diskonektovao
     }
+  } 
+  else if (type == WStype_TEXT) {
+    String message = (char *)payload;
+
+    // Pokreni registraciju otiska prsta kada stigne poruka "start"
+    if (message == "start") {
+      registrationActive = true;
+      Serial.println("Fingerprint registration started by client.");
+    }
   }
 }
+
 String urlEncode(String str) {
   String encodedString = "";
   char c;
@@ -432,17 +450,118 @@ void displayWelcomeMessage(String username) {
   display.display();
 }
 
-int generateFingerprintID() {
-  int id;
-  do {
-    id = random(1, 150);  // Generiši nasumičan ID u željenom rasponu, npr. 1-999
-  } while (!checkIDAvailability(id));  // Proveri da li je ID dostupan
-  return id;
+// Generiše novi ID ako nije zauzet
+int generateNewFingerprintID() {
+
+    for ( id = 1; id <= 200; id++) {
+        if (checkIDAvailability(id)) {
+            return id;
+        }
+    }
+    return -1;  // Nema slobodnih ID-eva
 }
+
 
 bool checkIDAvailability(uint8_t id) {
   int p = finger.loadModel(id);
   return (p != FINGERPRINT_OK);  // Ako učitavanje nije uspelo, ID je slobodan
+}
+
+void sendProgressUpdate(int step, const char* message) {
+    DynamicJsonDocument doc(1024);
+    doc["type"] = "progress";
+    doc["step"] = step;
+    doc["message"] = message;
+    String json;
+    serializeJson(doc, json);
+
+    Serial.print("Sending progress update: ");
+    Serial.println(json);  // Ispisuje JSON podatke za debagovanje
+
+    webSocket.broadcastTXT(json);
+}
+
+
+
+// Dodeljivanje ID-a korisniku
+void assignFingerprintID() {
+    int id = generateNewFingerprintID();
+    if (id > 0) {
+        Serial.print("Assigned ID #");
+        Serial.println(id);
+        sendProgressUpdate(0, ("Assigned ID #" + String(id)).c_str());
+    } else {
+        Serial.println("Error assigning ID. Resetting process.");
+        resetProgress();
+    }
+}
+
+
+// Prvo skeniranje otiska
+bool getFingerprintImage() {
+    int p = finger.getImage();
+    
+    if (p == FINGERPRINT_OK) {
+        Serial.println("Image taken");
+        finger.image2Tz(1);  // Konvertuje sliku i prelazi na sledeći korak
+        return true;         // Korak uspešan
+    } else if (p == FINGERPRINT_NOFINGER) {
+        Serial.println("Waiting for finger...");
+        delay(1000);         // Čeka 1 sekundu pre ponovne provere
+        return false;        // Ostaje u istom koraku dok ne detektuje prst
+    } else {
+        Serial.println("Error capturing fingerprint image");
+        resetProgress();     // Resetuje proces u slučaju greške
+        return false;
+    }
+}
+
+
+
+// Drugo skeniranje otiska
+bool confirmSecondScan() {
+    Serial.println("Remove your finger and place it again.");
+    delay(2000); // Pauza za uklanjanje prsta
+
+    int p = finger.getImage();
+    if (p == FINGERPRINT_OK) {
+        finger.image2Tz(2);
+        if (finger.createModel() == FINGERPRINT_OK) {
+            Serial.println("Fingerprint matched.");
+            return true; // Korak uspešan
+        } else {
+            Serial.println("Fingerprints did not match. Try again.");
+            resetProgress();
+        }
+    } else if (p == FINGERPRINT_NOFINGER) {
+        delay(1000); // Čeka da korisnik postavi prst
+    }
+    return false;
+}
+
+
+// Čuvanje otiska u memoriju
+bool saveFingerprint() {
+    int p = finger.storeModel(id);  // Ili upotrebi odgovarajući ID ako ga šalješ kao argument
+    if (p == FINGERPRINT_OK) {
+        Serial.println("Fingerprint stored successfully.");
+        fingerprintAdded = "true";  // Postavi na "true" kada je otisak uspešno sačuvan
+        return true;
+    } else {
+        Serial.println("Error storing fingerprint.");
+        fingerprintAdded = "false";  // Ako nije uspešno, ostavi na "false"
+        return false;
+    }
+}
+
+
+
+
+
+// Funkcija za resetovanje napretka ako korisnik ne uspe
+void resetProgress() {
+    Serial.println("Process failed. Restarting...");
+    currentStep = 0;
 }
 
 
@@ -844,7 +963,7 @@ void showAddUserPage() {
                 <!-- Voice Command dropdown -->
                 <label for="voice-command" class="voice-command-label">Voice command:</label>
                 <select name="voiceCommand" id="voice-command" class="dropdown">
-                    <option value="">Please select an option</option>
+                    <option value="">Please select a command</option>
                     <option value="option1">Option 1</option>
                     <option value="option2">Option 2</option>
                     <option value="option3">Option 3</option>
@@ -881,33 +1000,69 @@ void showAddUserPage() {
 
 
     <script>
+        
+        
+       let ws;
 
         function showFingerprintModal() {
             const progressBar = document.querySelector('[role="progressbar"]');
-            progressBar.style.setProperty('--value', 0); // Postavi vrednost na 0 pre početka
+            progressBar.style.setProperty('--value', 0);
             document.getElementById('fingerprint-modal').style.display = 'flex';
-            animateProgress();
-        }
+            currentStep = 0;
         
-        function closeFingerprintModal() {
-            document.getElementById('fingerprint-modal').style.display = 'none';
-        }
+            // Otvaramo WebSocket vezu
+            ws = new WebSocket('ws://' + window.location.hostname + ':81/');
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log("Received WebSocket message:", data);
         
-        function animateProgress() {
-            const progressBar = document.querySelector('[role="progressbar"]');
-            let value = 0;
-            const interval = setInterval(() => {
-                if (value >= 100) {
-                    clearInterval(interval);
-                    //closeFingerprintModal(); // Automatski zatvori modal kada dođe do 100%
-                } else {
-                    value += 1;
-                    progressBar.style.setProperty('--value', value);
-                    progressBar.setAttribute('aria-valuenow', value);
+                if (data.type === 'progress') {
+                    updateProgress(data.step, data.message);
                 }
-            }, 50); // Možete prilagoditi brzinu animacije ovde
+            };
+        
+            // Pošalji poruku za početak registracije kada se modal otvori
+            ws.onopen = function() {
+                ws.send("start"); // Inicira proces registracije
+            };
         }
-      
+        
+        function updateProgress(step, message) {
+            const progressBar = document.querySelector('[role="progressbar"]');
+            let progressValue;
+        
+            switch (step) {
+                case 0:
+                    progressValue = 25;
+                    break;
+                case 1:
+                    progressValue = 50;
+                    break;
+                case 2:
+                    progressValue = 75;
+                    break;
+                case 3:
+                    progressValue = 100;
+                    break;
+                default:
+                    progressValue = 0;
+            }
+        
+            // Ažuriraj progress bar i status poruku
+            progressBar.style.setProperty('--value', progressValue);
+            progressBar.setAttribute('aria-valuenow', progressValue);
+            document.getElementById('fingerprint-status').innerText = message;
+        }
+        
+        // Funkcija za zatvaranje modala na dugme "Close"
+          function closeFingerprintModal() {
+            document.getElementById('fingerprint-modal').style.display = 'none';
+            if (ws) {
+                ws.close();  // Zatvori WebSocket vezu samo kada korisnik klikne "Close"
+            }
+        }
+
+
               
         document.addEventListener('DOMContentLoaded', function() {
             var form = document.getElementById('addUserForm');
@@ -1111,8 +1266,9 @@ void handleAddUser() {
   }
 
    // Ako je validacija uspešna, dodajte korisnika
+    fingerprintAdded = "false";  // Resetuj status otiska nakon dodavanja korisnika
     String newPin = generateUniquePin();
-    String fingerprintID = String(generateFingerprintID()); // Generišemo jedinstveni fingerprint ID
+    String fingerprintID = String(generateNewFingerprintID()); // Generišemo jedinstveni fingerprint ID
     User newUser = {enteredUsername, newPin, fingerprintID, selectedVoiceCommand};
     users.push_back(newUser);
     saveUserToFile(enteredUsername, newPin, fingerprintID, selectedVoiceCommand);
@@ -1383,6 +1539,42 @@ void loop() {
   // Obrada WebSocket komunikacije
   webSocket.loop();
 
+    if (registrationActive) {  // Proces se pokreće samo kada je registracija aktivna
+        switch (currentStep) {
+            case 0:
+                Serial.println("Step 0: Assigning ID...");
+                assignFingerprintID();
+                sendProgressUpdate(0, "Assigning ID...");
+                currentStep = 1;
+                break;
+
+            case 1:
+                Serial.println("Step 1: Waiting for first scan...");
+                if (getFingerprintImage()) {
+                    sendProgressUpdate(1, "First scan complete. Remove finger.");
+                    currentStep = 2;
+                }
+                break;
+
+            case 2:
+                Serial.println("Step 2: Waiting for second scan...");
+                if (confirmSecondScan()) {
+                    sendProgressUpdate(2, "Second scan complete. Creating model...");
+                    currentStep = 3;
+                }
+                break;
+
+            case 3:
+                Serial.println("Step 3: Saving fingerprint...");
+                if (saveFingerprint()) {
+                    sendProgressUpdate(3, "Fingerprint successfully registered!");
+                    registrationActive = false;  // Deaktiviraj registraciju bez zatvaranja modala
+                    currentStep = 0;  // Resetuj za sledeću registraciju
+                }
+                break;
+        }
+                delay(500);  // Mali delay kako bi omogućio da se podaci pošalju pre prekida
+  }
   // Ako je korisnik ulogovan, pošalji sva trenutna stanja
   if (loggedInClientNum != -1) {
     sendAllStatusesToClient(loggedInClientNum);
