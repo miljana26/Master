@@ -10,9 +10,11 @@
 #include <time.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <Adafruit_Fingerprint.h>
 
 
-
+#define RX_PIN 16  
+#define TX_PIN 17  
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
@@ -27,7 +29,10 @@ const char* chatId = "8017471176";  // chat_id korisnika
 struct User {
   String username;
   String pin;
+  String fingerprintID; 
+  String voiceCommand;  
 };
+
 
 
 // Lista korisnika
@@ -60,7 +65,8 @@ bool doorState = false;  // Trenutno stanje vrata (zatvorena ili otvorena)
 uint8_t loggedInClientNum = -1;  // Promenljiva za čuvanje identifikatora ulogovanog klijenta
 String motionDetectedTime = "";  // Za čuvanje vremena detekcije pokreta
 
-
+HardwareSerial mySerial(2); // Koristi Serial2 za komunikaciju sa senzorom
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 
 // Keypad setup
 const byte ROWS = 4;
@@ -426,6 +432,19 @@ void displayWelcomeMessage(String username) {
   display.display();
 }
 
+int generateFingerprintID() {
+  int id;
+  do {
+    id = random(1, 150);  // Generiši nasumičan ID u željenom rasponu, npr. 1-999
+  } while (!checkIDAvailability(id));  // Proveri da li je ID dostupan
+  return id;
+}
+
+bool checkIDAvailability(uint8_t id) {
+  int p = finger.loadModel(id);
+  return (p != FINGERPRINT_OK);  // Ako učitavanje nije uspelo, ID je slobodan
+}
+
 
 // Funkcija za inicijalizaciju fajla sa korisnicima
 void initializeUserFile() {
@@ -438,8 +457,8 @@ void initializeUserFile() {
       return;
     }
 
-    // Dodaj default admin korisnika u fajl
-    file.println("admin,admin");
+    // Dodaj default admin korisnika u fajl sa samo username-om i pin-om
+    file.println("admin,admin,,"); // Prazna polja za fingerprintID i voiceCommand
     file.close();
     Serial.println("Kreiran fajl sa default admin korisnikom");
   } else {
@@ -459,12 +478,13 @@ void initializeUserFile() {
     // Ako admin ne postoji, dodaj ga u fajl
     if (!adminExists) {
       File file = SPIFFS.open("/users.txt", "a");
-      file.println("admin,admin");
+      file.println("admin,admin,,"); // Prazna polja za fingerprintID i voiceCommand
       file.close();
       Serial.println("Dodao admin korisnika u postojeći fajl");
     }
   }
 }
+
 
 // Funkcija za učitavanje korisnika iz fajla
 void loadUsersFromFile() {
@@ -479,11 +499,16 @@ void loadUsersFromFile() {
     line.trim();
     if (line.length() == 0) continue;
 
-    int commaIndex = line.indexOf(',');
-    if (commaIndex > 0) {
-      String username = line.substring(0, commaIndex);
-      String pin = line.substring(commaIndex + 1);
-      users.push_back({username, pin});
+    int commaIndex1 = line.indexOf(',');
+    int commaIndex2 = line.indexOf(',', commaIndex1 + 1);
+    int commaIndex3 = line.indexOf(',', commaIndex2 + 1);
+
+    if (commaIndex1 > 0 && commaIndex2 > commaIndex1 && commaIndex3 > commaIndex2) {
+      String username = line.substring(0, commaIndex1);
+      String pin = line.substring(commaIndex1 + 1, commaIndex2);
+      String fingerprintID = line.substring(commaIndex2 + 1, commaIndex3);
+      String voiceCommand = line.substring(commaIndex3 + 1);
+      users.push_back({username, pin, fingerprintID, voiceCommand});
     }
   }
 
@@ -491,39 +516,41 @@ void loadUsersFromFile() {
 }
 
 
+
 // Funkcija za dodavanje korisnika u fajl
-void saveUserToFile(const String& username, const String& pin) {
+void saveUserToFile(const String& username, const String& pin, const String& fingerprintID, const String& voiceCommand) {
   File file = SPIFFS.open("/users.txt", FILE_APPEND);
   if (!file) {
     Serial.println("Greška pri otvaranju fajla za korisnike");
     return;
   }
 
-  file.println(username + "," + pin);
+  file.println(username + "," + pin + "," + fingerprintID + "," + voiceCommand);
   file.close();
 }
 
 
+
 // Funkcija za brisanje korisnika iz fajla
 void deleteUserFromFile(const String& usernameToDelete) {
-  File file = SPIFFS.open("/users_temp.txt", "w");  // Privremeni fajl
+  File file = SPIFFS.open("/users_temp.txt", "w");
   if (!file) {
     Serial.println("Neuspešno otvaranje privremenog fajla");
     return;
   }
 
   for (User &u : users) {
-    // Ne dozvoli brisanje admin korisnika
     if (u.username != usernameToDelete && u.username != "admin") {
-      file.println(u.username + "," + u.pin);  // Piši samo korisnike koji nisu obrisani
+      file.println(u.username + "," + u.pin + "," + u.fingerprintID + "," + u.voiceCommand);
     }
   }
 
   file.close();
 
-  SPIFFS.remove("/users.txt");  // Izbriši originalni fajl
-  SPIFFS.rename("/users_temp.txt", "/users.txt");  // Preimenuj privremeni fajl u originalni
+  SPIFFS.remove("/users.txt");
+  SPIFFS.rename("/users_temp.txt", "/users.txt");
 }
+
 
 // Funkcija za prikaz glavnog prozora sa dugmadima
 void showMainPage() {
@@ -765,6 +792,8 @@ void showAddUserPage() {
         .voice-command-label { color: #000000; font-size: 16px; margin-top: 15px; display: block; }
         .dropdown { width: 101%; padding: 15px; margin-top: 5px; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }
         .dropdown option { background-color: #112240; color: #ffffff; }
+        .fingerprint-error, .voice-command-error {border: 1px solid red;}
+        .error-message {color: red;font-size: 14px;margin-top: 5px;}
         .add-user-button { width: 85%; padding: 15px; margin-top: 20px; margin-left: 29px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; border: none; }
         .add-user-button:hover { background-color: #00a3cc; }
         .back-button { width: 93%; padding: 15px; margin-top: 10px; background-color: #00d4ff; color: #ffffff; text-align: center; text-decoration: none; display: block; border-radius: 5px; font-size: 16px; }
@@ -808,11 +837,14 @@ void showAddUserPage() {
                 <div id="username-error" class="error-message"></div>
 
                 <!-- Add Fingerprint button -->
-                <input type="button" value="Add Fingerprint" class="add-fingerprint-button" onclick="showFingerprintModal()"><br>
+                <input type="button" value="Add Fingerprint" id="add-fingerprint" class="add-fingerprint-button" onclick="showFingerprintModal()">
+                <div id="fingerprint-error" class="error-message"></div>
+
 
                 <!-- Voice Command dropdown -->
                 <label for="voice-command" class="voice-command-label">Voice command:</label>
                 <select name="voiceCommand" id="voice-command" class="dropdown">
+                    <option value="">Please select an option</option>
                     <option value="option1">Option 1</option>
                     <option value="option2">Option 2</option>
                     <option value="option3">Option 3</option>
@@ -821,6 +853,8 @@ void showAddUserPage() {
                     <option value="option6">Option 6</option>
                     <option value="option7">Option 7</option>
                 </select>
+                <div id="voice-command-error" class="error-message"></div>
+
 
                 <!-- CAPTCHA section -->
                 <div class="captcha" id="captcha-section">
@@ -921,6 +955,18 @@ void showAddUserPage() {
 
                 var captchaLabel = document.querySelector('.captcha label');
                 captchaLabel.classList.remove('captcha-error-label');
+
+                var fingerprintError = document.getElementById('fingerprint-error');
+                fingerprintError.innerText = '';
+            
+                var fingerprintButton = document.getElementById('add-fingerprint');
+                fingerprintButton.classList.remove('fingerprint-error');
+            
+                var voiceCommandError = document.getElementById('voice-command-error');
+                voiceCommandError.innerText = '';
+            
+                var voiceCommandSelect = document.getElementById('voice-command');
+                voiceCommandSelect.classList.remove('voice-command-error');
             }
 
             function displayErrorMessages(errors) {
@@ -936,7 +982,23 @@ void showAddUserPage() {
                     var captchaSection = document.getElementById('captcha-section');
                     captchaSection.classList.add('captcha-error');
                 }
+
+            if (errors.fingerprint) {
+                var fingerprintError = document.getElementById('fingerprint-error');
+                fingerprintError.innerText = "Fingerprint not added";
+        
+                var fingerprintButton = document.getElementById('add-fingerprint');
+                fingerprintButton.classList.add('fingerprint-error');
             }
+        
+            if (errors.voiceCommand) {
+                var voiceCommandError = document.getElementById('voice-command-error');
+                voiceCommandError.innerText = errors.voiceCommand;  // Prikazuje poruku greške
+        
+                var voiceCommandSelect = document.getElementById('voice-command');
+                voiceCommandSelect.classList.add('voice-command-error');  // Dodaje klasu za grešku
+            }
+          }
         });
     </script>
 </body>
@@ -996,6 +1058,9 @@ void handleAddUser() {
   bool success = true;
 
   String enteredUsername = server.arg("username");
+  String selectedVoiceCommand = server.arg("voiceCommand");
+  String fingerprintAdded = server.arg("fingerprint");  // Pretpostavljamo da je 'fingerprint' argument prisutan kad je otisak dodat
+
 
   // Validacija CAPTCHA
   if (!server.hasArg("captcha")) {
@@ -1025,6 +1090,18 @@ void handleAddUser() {
     }
   }
 
+    // Validacija otiska prsta
+    if (fingerprintAdded != "true") {
+        errors["fingerprint"] = "Fingerprint not added.";
+        success = false;
+    }
+
+    // Validacija izbora voice command-a
+    if (selectedVoiceCommand == "") {
+        errors["voiceCommand"] = "Voice command not selected.";
+        success = false;
+    }
+
   if (!success) {
     jsonResponse["success"] = false;
     String response;
@@ -1033,11 +1110,12 @@ void handleAddUser() {
     return;
   }
 
-  // Ako je validacija uspešna, dodajte korisnika
-  String newPin = generateUniquePin();
-  User newUser = {enteredUsername, newPin};
-  users.push_back(newUser);
-  saveUserToFile(enteredUsername, newPin);
+   // Ako je validacija uspešna, dodajte korisnika
+    String newPin = generateUniquePin();
+    String fingerprintID = String(generateFingerprintID()); // Generišemo jedinstveni fingerprint ID
+    User newUser = {enteredUsername, newPin, fingerprintID, selectedVoiceCommand};
+    users.push_back(newUser);
+    saveUserToFile(enteredUsername, newPin, fingerprintID, selectedVoiceCommand);
 
   // Vratite odgovor o uspehu
   jsonResponse["success"] = true;
@@ -1205,7 +1283,9 @@ void handleLogout() {
 void setup() {
   Serial.begin(115200);
   randomSeed(analogRead(0));
-
+  
+  mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
+  finger.begin(57600);
 
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);  // Podesi vremensku zonu za Centralnoevropsko vreme (CET)
@@ -1270,6 +1350,24 @@ void setup() {
   server.on("/login", HTTP_POST, handleLogin);
   server.on("/delete", HTTP_GET, handleUserDeletion);
   server.on("/logout", HTTP_GET, handleLogout);
+
+
+  if (finger.verifyPassword()) {
+    Serial.println("Found fingerprint sensor!");
+  } else {
+    Serial.println("Did not find fingerprint sensor :(");
+    while (1) { delay(1); }
+  }
+
+  Serial.println(F("Reading sensor parameters"));
+  finger.getParameters();
+  Serial.print(F("Status: 0x")); Serial.println(finger.status_reg, HEX);
+  Serial.print(F("Sys ID: 0x")); Serial.println(finger.system_id, HEX);
+  Serial.print(F("Capacity: ")); Serial.println(finger.capacity);
+  Serial.print(F("Security level: ")); Serial.println(finger.security_level);
+  Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
+  Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
+  Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate); 
 }
 
 void loop() {
