@@ -644,7 +644,7 @@ void initializeUserFile() {
     // Ako admin ne postoji, dodaj ga u fajl
     if (!adminExists) {
       File file = SPIFFS.open("/users.txt", "a");
-      file.println("admin,admin,,"); // Prazna polja za fingerprintID i voiceCommand
+      file.println("admin,admin,,"); // Correct format with extra commas
       file.close();
       Serial.println("Dodao admin korisnika u postojeći fajl");
     }
@@ -669,17 +669,35 @@ void loadUsersFromFile() {
     int commaIndex2 = line.indexOf(',', commaIndex1 + 1);
     int commaIndex3 = line.indexOf(',', commaIndex2 + 1);
 
-    if (commaIndex1 > 0 && commaIndex2 > commaIndex1 && commaIndex3 > commaIndex2) {
+    if (commaIndex1 > 0) {
       String username = line.substring(0, commaIndex1);
-      String pin = line.substring(commaIndex1 + 1, commaIndex2);
-      String fingerprintID = line.substring(commaIndex2 + 1, commaIndex3);
-      String voiceCommand = line.substring(commaIndex3 + 1);
+      String pin;
+      String fingerprintID = "";
+      String voiceCommand = "";
+
+      if (commaIndex2 > commaIndex1) {
+        pin = line.substring(commaIndex1 + 1, commaIndex2);
+      } else {
+        pin = line.substring(commaIndex1 + 1);
+      }
+
+      if (commaIndex2 > commaIndex1 && commaIndex3 > commaIndex2) {
+        fingerprintID = line.substring(commaIndex2 + 1, commaIndex3);
+        voiceCommand = line.substring(commaIndex3 + 1);
+      } else if (commaIndex2 > commaIndex1) {
+        fingerprintID = line.substring(commaIndex2 + 1);
+      }
+
       users.push_back({username, pin, fingerprintID, voiceCommand});
+      Serial.println("Loaded user: " + username + ", PIN: " + pin);
+    } else {
+      Serial.println("Failed to parse line: " + line);
     }
   }
 
   file.close();
 }
+
 
 
 
@@ -717,6 +735,20 @@ void deleteUserFromFile(const String& usernameToDelete) {
   SPIFFS.rename("/users_temp.txt", "/users.txt");
 }
 
+void printUsersFile() {
+  File file = SPIFFS.open("/users.txt", "r");
+  if (!file) {
+    Serial.println("Unable to open users.txt");
+    return;
+  }
+
+  Serial.println("Contents of users.txt:");
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    Serial.println(line);
+  }
+  file.close();
+}
 
 // Funkcija za prikaz glavnog prozora sa dugmadima
 void showMainPage() {
