@@ -1007,7 +1007,7 @@ void showAddUserPage() {
         [role="progressbar"]::before { content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: conic-gradient(var(--primary) calc(var(--percentage) * 1%), var(--secondary) 0); mask: radial-gradient(white 55%, transparent 0); mask-mode: alpha; -webkit-mask: radial-gradient(#0000 55%, #000 0); -webkit-mask-mode: alpha; } 
         [role="progressbar"]::after { counter-reset: percentage var(--value); content: counter(percentage) '%'; font-family: Helvetica, Arial, sans-serif; font-size: calc(var(--size) / 5); color: var(--primary); }
 
-        .modal { display: none; flex-direction: column; justify-content: center; align-items: center; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 250px; height: 250px; background-color: #1A4D8A; border-radius: 15px; padding: 20px; text-align: center; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); color: #00d4ff; }
+        .modal { display: none; flex-direction: column; justify-content: center; align-items: center; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 260px; height: 260px; background-color: #1A4D8A; border-radius: 15px; padding: 20px; text-align: center; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); color: #00d4ff; }
         
         .close-button { margin-top: 15px; padding: 10px 20px; background-color: #00d4ff; color: #ffffff; border: none; border-radius: 5px; cursor: pointer; }
         
@@ -1102,34 +1102,60 @@ void showAddUserPage() {
             };
         }
 
-        
         function updateProgress(step, message) {
             const progressBar = document.querySelector('[role="progressbar"]');
-            let progressValue;
+            let targetValue;
         
             switch (step) {
                 case 0:
-                    progressValue = 25;
+                    targetValue = 25;
                     break;
                 case 1:
-                    progressValue = 50;
+                    targetValue = 50;
                     break;
                 case 2:
-                    progressValue = 75;
+                    targetValue = 75;
                     break;
                 case 3:
-                    progressValue = 100;
+                    targetValue = 100;
                     break;
                 default:
-                    progressValue = 0;
+                    targetValue = 0;
             }
         
-            // Ažuriraj progress bar i status poruku
-            progressBar.style.setProperty('--value', progressValue);
-            progressBar.setAttribute('aria-valuenow', progressValue);
-            document.getElementById('fingerprint-status').innerText = message;
-        }
+            // Dohvati trenutnu vrednost progress bara
+            let currentValue = parseInt(progressBar.style.getPropertyValue('--value')) || 0;
         
+            // Ako je progress bar tek inicijalizovan i nema vrednost 'aria-valuenow', pokušaj da je dohvatiš odatle
+            if (!currentValue) {
+                currentValue = parseInt(progressBar.getAttribute('aria-valuenow')) || 0;
+            }
+        
+            // Odredi smer inkrementacije
+            const increment = currentValue < targetValue ? 1 : -1;
+        
+            // Funkcija za animaciju
+            function animateProgress() {
+                if (currentValue === targetValue) {
+                    // Animacija završena
+                    document.getElementById('fingerprint-status').innerText = message;
+                    return;
+                }
+        
+                currentValue += increment;
+                progressBar.style.setProperty('--value', currentValue);
+                progressBar.setAttribute('aria-valuenow', currentValue);
+        
+                // Pozovi sledeći frame za animaciju
+                setTimeout(animateProgress, 10); // Možete prilagoditi interval za bržu ili sporiju animaciju
+            }
+        
+            // Pokreni animaciju
+            animateProgress();
+        }
+
+        
+      
         // Funkcija za zatvaranje modala na dugme "Close"
          function closeFingerprintModal() {
             document.getElementById('fingerprint-modal').style.display = 'none';
