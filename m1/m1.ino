@@ -13,6 +13,7 @@
 #include <Adafruit_Fingerprint.h>
 
 
+
 #define RX_PIN 16  
 #define TX_PIN 17  
 #define SCREEN_WIDTH 128
@@ -24,6 +25,7 @@ const char *ssid = "MS";
 const char *password = "zastomezezas";
 const char* telegramToken = "7454592874:AAE7dneypwpAgrV2GxIsEVole_JwEyjh9RE";  // Bot tokenom
 const char* chatId = "8017471176";  // chat_id korisnika
+
 
 // Struktura za login korisnika
 struct User {
@@ -68,7 +70,7 @@ int currentStep = 0;  // Globalna promenljiva za praćenje koraka
 bool noFingerMessageShown = false;
 bool registrationActive = false;
 bool fingerprintAdded = false;  // Praćenje statusa otiska prsta
-int id = 0;  // Globalna promenljiva za ID otiska prsta
+int fingerprintID = 0;  // Podesi početnu vrednost na 0 ili neku odgovarajuću vrednost
 
 
 
@@ -453,7 +455,7 @@ void displayWelcomeMessage(String username) {
 // Generiše novi ID ako nije zauzet
 int generateNewFingerprintID() {
 
-    for ( id = 1; id <= 200; id++) {
+    for (int id = 1; id <= 200; id++) {
         if (checkIDAvailability(id)) {
             return id;
         }
@@ -485,13 +487,12 @@ void sendProgressUpdate(int step, const char* message) {
 
 // Dodeljivanje ID-a korisniku
 void assignFingerprintID() {
-    int id = generateNewFingerprintID();
-    if (id > 0) {
-        Serial.print("Assigned ID #");
-        Serial.println(id);
-        sendProgressUpdate(0, ("Assigned ID #" + String(id)).c_str());
+    fingerprintID = generateNewFingerprintID();  // Generiši novi ID i dodeli ga fingerprintID
+    if (fingerprintID > 0) {
+        Serial.print("Assigned Fingerprint ID #");
+        Serial.println(fingerprintID);
     } else {
-        Serial.println("Error assigning ID. Resetting process.");
+        Serial.println("Error assigning Fingerprint ID.");
         resetProgress();
     }
 }
@@ -539,21 +540,57 @@ bool confirmSecondScan() {
     return false;
 }
 
+bool getFingerprintAdded() {
+    if (!SPIFFS.exists("/fingerprintAdded.txt")) {
+        Serial.println("Fingerprint status file does not exist. Returning false.");
+        return false;
+    }
+    File file = SPIFFS.open("/fingerprintAdded.txt", FILE_READ);
+    if (!file) {
+        Serial.println("Failed to open file for reading");
+        return false;
+    }
+    String value = file.readString();
+    file.close();
+    Serial.print("Retrieved fingerprintAdded from SPIFFS: ");
+    Serial.println(value);
+    return value == "true";
+}
+
 
 // Čuvanje otiska u memoriju
+void saveFingerprintAdded(bool status) {
+    File file = SPIFFS.open("/fingerprintAdded.txt", FILE_WRITE);
+    if (!file) {
+        Serial.println("Failed to open file for writing");
+        return;
+    }
+    file.print(status ? "true" : "false");
+    file.close();
+    Serial.println("Saved fingerprintAdded to SPIFFS");
+}
+
 bool saveFingerprint() {
-    int p = finger.storeModel(id);  // Ili upotrebi odgovarajući ID ako ga šalješ kao argument
+    int p = finger.storeModel(fingerprintID);
     if (p == FINGERPRINT_OK) {
         Serial.println("Fingerprint stored successfully.");
-        fingerprintAdded = "true";  // Postavi na "true" kada je otisak uspešno sačuvan
+        fingerprintAdded = "true";
+        saveFingerprintAdded(true);  // Save to SPIFFS
+        Serial.println("Saved fingerprintAdded as true in SPIFFS");
+
+        // Test retrieval
+        bool testRetrieve = getFingerprintAdded();
+        Serial.print("Test retrieve after saving: ");
+        Serial.println(testRetrieve ? "true" : "false");
+
         return true;
     } else {
         Serial.println("Error storing fingerprint.");
-        fingerprintAdded = "false";  // Ako nije uspešno, ostavi na "false"
+        fingerprintAdded = "false";
+        saveFingerprintAdded(false);  // Save to SPIFFS
         return false;
     }
 }
-
 
 
 
@@ -1208,6 +1245,7 @@ void handleLogin() {
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
+  Serial.println("Entering handleAddUser...");
   DynamicJsonDocument jsonResponse(1024);
   JsonObject errors = jsonResponse.createNestedObject("errors");
   bool success = true;
@@ -1216,6 +1254,11 @@ void handleAddUser() {
   String selectedVoiceCommand = server.arg("voiceCommand");
   String fingerprintAdded = server.arg("fingerprint");  // Pretpostavljamo da je 'fingerprint' argument prisutan kad je otisak dodat
 
+  
+      // Retrieve the fingerprintAdded status from SPIFFS
+    fingerprintAdded = getFingerprintAdded() ? "true" : "false";
+    Serial.print("Retrieved fingerprintAdded from SPIFFS in handleAddUser(): ");
+    Serial.println(fingerprintAdded);
 
   // Validacija CAPTCHA
   if (!server.hasArg("captcha")) {
@@ -1266,7 +1309,8 @@ void handleAddUser() {
   }
 
    // Ako je validacija uspešna, dodajte korisnika
-    fingerprintAdded = "false";  // Resetuj status otiska nakon dodavanja korisnika
+    fingerprintAdded = "false";
+    saveFingerprintAdded(false);  // Reset the status in SPIFFS  
     String newPin = generateUniquePin();
     String fingerprintID = String(generateNewFingerprintID()); // Generišemo jedinstveni fingerprint ID
     User newUser = {enteredUsername, newPin, fingerprintID, selectedVoiceCommand};
@@ -1443,6 +1487,7 @@ void setup() {
   mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
   finger.begin(57600);
 
+
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);  // Podesi vremensku zonu za Centralnoevropsko vreme (CET)
 
@@ -1564,14 +1609,18 @@ void loop() {
                 }
                 break;
 
-            case 3:
-                Serial.println("Step 3: Saving fingerprint...");
-                if (saveFingerprint()) {
-                    sendProgressUpdate(3, "Fingerprint successfully registered!");
-                    registrationActive = false;  // Deaktiviraj registraciju bez zatvaranja modala
-                    currentStep = 0;  // Resetuj za sledeću registraciju
-                }
-                break;
+                case 3:
+                    Serial.println("Step 3: Saving fingerprint...");
+                    if (saveFingerprint()) {
+                        sendProgressUpdate(3, "Fingerprint successfully registered!");
+                        registrationActive = false;  // Deaktiviraj registraciju
+                        currentStep = 0;  // Resetuj korak
+                    } else {
+                        Serial.println("Failed to save fingerprint.");
+                        resetProgress();
+                    }
+                    break;
+
         }
                 delay(500);  // Mali delay kako bi omogućio da se podaci pošalju pre prekida
   }
