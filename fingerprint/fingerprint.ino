@@ -33,6 +33,9 @@ void setup() {
   Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
   Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
   Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate);
+
+    listOccupiedIDs();
+
 }
 
 void loop() {
@@ -239,4 +242,19 @@ uint8_t getFingerprintEnroll(uint8_t id) {
   }
 
   return true;
+}
+
+void listOccupiedIDs() {
+  Serial.print("Occupied IDs: ");
+  for (uint16_t id = 1; id < finger.capacity; id++) {
+    int p = finger.loadModel(id);
+    if (p == FINGERPRINT_OK) {
+      Serial.print(id); Serial.print(" ");
+    } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+      Serial.println("Communication error");
+      break;
+    }
+    // Ako p nije FINGERPRINT_OK, ID je slobodan ili se dogodila greška
+  }
+  Serial.println();
 }
