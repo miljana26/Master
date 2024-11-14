@@ -458,17 +458,6 @@ void startFingerprintRegistration() {
     registrationActive = true;
 }
 
-void assignFingerprintID() {
-    fingerprintID = generateNewFingerprintID();
-    if (fingerprintID > 0) {
-        Serial.print("Assigned Fingerprint ID #");
-        Serial.println(fingerprintID);
-    } else {
-        Serial.println("Error assigning Fingerprint ID.");
-        resetRegistrationProcess();
-    }
-}
-
 // Generiše novi ID ako nije zauzet
 int generateNewFingerprintID() {
  for (int id = 1; id < 200; id++) {
@@ -484,6 +473,18 @@ bool checkIDAvailability(int id) {
   int p = finger.loadModel(id);
   return (p != FINGERPRINT_OK);  // Ako učitavanje nije uspelo, ID je slobodan
 }
+
+void assignFingerprintID() {
+    fingerprintID = generateNewFingerprintID();
+    if (fingerprintID > 0) {
+        Serial.print("Assigned Fingerprint ID #");
+        Serial.println(fingerprintID);
+    } else {
+        Serial.println("Error assigning Fingerprint ID.");
+        resetRegistrationProcess();
+    }
+}
+
 
 void sendProgressUpdate(int step, const char* message) {
     DynamicJsonDocument doc(1024);
@@ -503,22 +504,36 @@ void sendProgressUpdate(int step, const char* message) {
 
 // Prvo skeniranje otiska
 bool getFingerprintImage() {
-    int p = finger.getImage();
-    
-    if (p == FINGERPRINT_OK) {
-        Serial.println("Image taken");
+    int attempts = 0;  // Broji pokušaje
+    while (attempts < 3) {  // Maksimalno tri pokušaja
+        int p = finger.getImage();
+        
+        if (p == FINGERPRINT_OK) {
+            attempts++;  // Povećava broj pokušaja
+            delay(50);   // Kratko odlaganje pre ponovnog skeniranja
+        } else if (p == FINGERPRINT_NOFINGER) {
+            Serial.println("Waiting for finger...");
+            delay(1000); // Čeka 1 sekundu pre sledeće provere
+            return false;  // Ako prsta nema, izlazi iz funkcije
+        } else {
+            Serial.println("Error capturing fingerprint image");
+            resetProgress();  // Resetuje proces u slučaju greške
+            return false;
+        }
+    }
+
+    // Ako su sva tri pokušaja uspešna, prihvata otisak
+    if (attempts == 3) {
+        Serial.println("Image confirmed after 3 attempts");
         finger.image2Tz(1);  // Konvertuje sliku i prelazi na sledeći korak
-        return true;         // Korak uspešan
-    } else if (p == FINGERPRINT_NOFINGER) {
-        Serial.println("Waiting for finger...");
-        delay(1000);         // Čeka 1 sekundu pre ponovne provere
-        return false;        // Ostaje u istom koraku dok ne detektuje prst
+        return true;
     } else {
-        Serial.println("Error capturing fingerprint image");
-        resetProgress();     // Resetuje proces u slučaju greške
+        Serial.println("Failed to confirm fingerprint after 3 attempts");
+        resetProgress();  // Resetuje proces ako otisak nije potvrđen
         return false;
     }
 }
+
 
 
 
@@ -1084,12 +1099,19 @@ void showAddUserPage() {
        let ws;
 
         function showFingerprintModal() {
+        // Ako postoji otvorena WebSocket veza, zatvori je
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+            }
+            
             const progressBar = document.querySelector('[role="progressbar"]');
-            progressBar.style.setProperty('--value', 0);
-            document.getElementById('fingerprint-status').innerText = '';
+            progressBar.style.setProperty('--value', 0); // Reset progresivne trake na 0%
+            progressBar.setAttribute('aria-valuenow', 0); // Resetiraj trenutnu vrednost
+            document.getElementById('fingerprint-status').innerText = 'Assigning ID...'; // Resetiraj poruku
             document.getElementById('fingerprint-modal').style.display = 'flex';
             currentStep = 0;
         
+            // Ponovno otvaranje WebSocket veze
             ws = new WebSocket('ws://' + window.location.hostname + ':81/');
             ws.onopen = function() {
                 ws.send("start"); // Pokreni proces registracije
@@ -1102,10 +1124,11 @@ void showAddUserPage() {
             };
         }
 
+
         function updateProgress(step, message) {
             const progressBar = document.querySelector('[role="progressbar"]');
             let targetValue;
-        
+            
             switch (step) {
                 case 0:
                     targetValue = 25;
@@ -1123,21 +1146,15 @@ void showAddUserPage() {
                     targetValue = 0;
             }
         
-            // Dohvati trenutnu vrednost progress bara
             let currentValue = parseInt(progressBar.style.getPropertyValue('--value')) || 0;
-        
-            // Ako je progress bar tek inicijalizovan i nema vrednost 'aria-valuenow', pokušaj da je dohvatiš odatle
             if (!currentValue) {
                 currentValue = parseInt(progressBar.getAttribute('aria-valuenow')) || 0;
             }
         
-            // Odredi smer inkrementacije
             const increment = currentValue < targetValue ? 1 : -1;
-        
-            // Funkcija za animaciju
+            
             function animateProgress() {
                 if (currentValue === targetValue) {
-                    // Animacija završena
                     document.getElementById('fingerprint-status').innerText = message;
                     return;
                 }
@@ -1145,23 +1162,21 @@ void showAddUserPage() {
                 currentValue += increment;
                 progressBar.style.setProperty('--value', currentValue);
                 progressBar.setAttribute('aria-valuenow', currentValue);
-        
-                // Pozovi sledeći frame za animaciju
-                setTimeout(animateProgress, 10); // Možete prilagoditi interval za bržu ili sporiju animaciju
+                setTimeout(animateProgress, 10);
             }
         
-            // Pokreni animaciju
             animateProgress();
         }
+
 
         
       
         // Funkcija za zatvaranje modala na dugme "Close"
          function closeFingerprintModal() {
             document.getElementById('fingerprint-modal').style.display = 'none';
-            if (ws) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send("cancel"); // Obavesti ESP32 da resetuje proces registracije
-                ws.close();        // Zatvori WebSocket vezu
+                ws.close(); // Zatvori WebSocket vezu
             }
         }
 
