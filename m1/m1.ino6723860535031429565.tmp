@@ -460,60 +460,30 @@ void startFingerprintRegistration() {
 
 // Generiše novi ID ako nije zauzet
 int generateNewFingerprintID() {
-    for (int id = 1; id <= finger.capacity; id++) {
+ for (int id = 1; id < 200; id++) {
         if (checkIDAvailability(id)) {
-            return id;  // Prvi slobodan ID
+            return id;
         }
     }
-    Serial.println("No available IDs!");
-    return -1;  // Nema slobodnih ID-eva
+    return -1; // Nema slobodnih ID-eva
 }
-
 
 
 bool checkIDAvailability(int id) {
-    Serial.print("Checking availability for ID ");
-    Serial.println(id);
-
-    int p = finger.loadModel(id);
-    if (p == FINGERPRINT_OK) {
-        Serial.println("ID " + String(id) + " is occupied.");
-        return false;  // ID je zauzet
-    } else {
-        Serial.println("ID " + String(id) + " is available.");
-        return true;  // ID je slobodan
-    }
+  int p = finger.loadModel(id);
+  return (p != FINGERPRINT_OK);  // Ako učitavanje nije uspelo, ID je slobodan
 }
 
-
 void assignFingerprintID() {
-    refreshFingerprintIDs();  // Osvežavanje pre dodeljivanja ID-a
     fingerprintID = generateNewFingerprintID();
     if (fingerprintID > 0) {
-        Serial.print("Assigned Fingerprint ID: ");
+        Serial.print("Assigned Fingerprint ID #");
         Serial.println(fingerprintID);
     } else {
-        Serial.println("Error: No available Fingerprint ID.");
+        Serial.println("Error assigning Fingerprint ID.");
         resetRegistrationProcess();
     }
 }
-
-
-
-void refreshFingerprintIDs() {
-    Serial.println("Refreshing fingerprint IDs...");
-    for (int id = 1; id <= finger.capacity; id++) {
-        int p = finger.loadModel(id);
-        if (p == FINGERPRINT_OK) {
-            Serial.println("ID " + String(id) + " is occupied.");
-        } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
-            Serial.println("Error reading ID " + String(id));
-        } else {
-            Serial.println("ID " + String(id) + " is available.");
-        }
-    }
-}
-
 
 
 void sendProgressUpdate(int step, const char* message) {
@@ -630,10 +600,6 @@ bool saveFingerprint() {
         bool testRetrieve = getFingerprintAdded();
         Serial.print("Test retrieve after saving: ");
         Serial.println(testRetrieve ? "true" : "false");
-        Serial.println("Refreshing fingerprint ID in saveFingerprint() function...");
-
-                refreshFingerprintIDs();  // Osvežavanje posle dodavanja otiska
-
 
         return true;
     } else {
@@ -649,7 +615,7 @@ void resetRegistrationProcess() {
     registrationActive = false;
     currentStep = 0;
     fingerprintAdded = "false";
-    //fingerprintID = 0; // Resetujte ID ako je potrebno
+    fingerprintID = 0; // Resetujte ID ako je potrebno
     // Takođe, resetujte bilo koje delimične podatke ili bafer ako je potrebno
 }
 
@@ -743,8 +709,7 @@ void loadUsersFromFile() {
       }
 
       users.push_back({username, pin, fingerprintID, voiceCommand});
-                  Serial.printf("Loaded user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
-                          username.c_str(), pin.c_str(), fingerprintID.c_str(), voiceCommand.c_str());
+      Serial.printf("Loaded user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
     } else {
       Serial.println("Failed to parse line: " + line);
     }
@@ -760,96 +725,43 @@ void loadUsersFromFile() {
 
 // Funkcija za dodavanje korisnika u fajl
 void saveUserToFile(const String& username, const String& pin, const String& fingerprintID, const String& voiceCommand) {
-    Serial.printf("Saving user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
-                  username.c_str(), pin.c_str(), fingerprintID.c_str(), voiceCommand.c_str());
+      Serial.printf("Saving user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
 
-    File file = SPIFFS.open("/users.txt", FILE_APPEND);
-    if (!file) {
-        Serial.println("Error opening user file for appending.");
-        return;
-    }
+  File file = SPIFFS.open("/users.txt", FILE_APPEND);
+  if (!file) {
+    Serial.println("Greška pri otvaranju fajla za korisnike");
+    return;
+  }
 
-    file.println(username + "," + pin + "," + fingerprintID + "," + voiceCommand);
-    file.close();
-    Serial.println("User saved to file.");
+  file.println(username + "," + pin + "," + fingerprintID + "," + voiceCommand);
+  file.close();
+      Serial.println("User saved to file.");
+
 }
-
 
 
 
 // Funkcija za brisanje korisnika iz fajla
 void deleteUserFromFile(const String& usernameToDelete) {
-    Serial.println("Entered deleteUserFromFile function.");
 
-    bool userFound = false;
-    int fingerprintIDToDelete = -1;
+  File file = SPIFFS.open("/users_temp.txt", "w");
+  if (!file) {
+    Serial.println("Neuspešno otvaranje privremenog fajla");
+    return;
+  }
 
-    // Search for the user in memory to find their fingerprint ID
-    for (User &u : users) {
-        if (u.username == usernameToDelete) {
-            userFound = true;
-            fingerprintIDToDelete = u.fingerprintID.toInt();
-            Serial.println("Found user to delete: " + u.username);
-            break;
-        }
+  for (User &u : users) {
+    if (u.username != usernameToDelete && u.username != "admin") {
+      file.println(u.username + "," + u.pin + "," + u.fingerprintID + "," + u.voiceCommand);
     }
+  }
 
-    if (!userFound) {
-        Serial.println("User not found in memory, no action taken for deletion.");
-        return;
-    }
+  file.close();
 
-    // Attempt to delete the fingerprint from the sensor
-    if (fingerprintIDToDelete >= 0) {
-        int deleteStatus = finger.deleteModel(fingerprintIDToDelete);
-        if (deleteStatus == FINGERPRINT_OK) {
-            Serial.println("Fingerprint ID " + String(fingerprintIDToDelete) + " deleted successfully.");
-        } else {
-            Serial.println("Failed to delete Fingerprint ID " + String(fingerprintIDToDelete) + ". Error code: " + String(deleteStatus));
-        }
-    }
-
-    // Remove the user from the users.txt file by creating a temporary file and excluding the target user
-    File tempFile = SPIFFS.open("/users_temp.txt", "w");
-    if (!tempFile) {
-        Serial.println("Failed to open temporary file for writing.");
-        return;
-    }
-
-    for (User &u : users) {
-        if (u.username != usernameToDelete) {
-            tempFile.println(u.username + "," + u.pin + "," + u.fingerprintID + "," + u.voiceCommand);
-            Serial.println("Writing user to temp file: " + u.username);
-        }
-    }
-
-    tempFile.close();
-
-    // Replace users.txt with the updated file
-    if (SPIFFS.remove("/users.txt")) {
-        Serial.println("Deleted original users.txt file.");
-    } else {
-        Serial.println("Failed to delete original users.txt file.");
-    }
-
-    if (SPIFFS.rename("/users_temp.txt", "/users.txt")) {
-        Serial.println("Renamed temp file to users.txt successfully.");
-    } else {
-        Serial.println("Failed to rename temp file to users.txt.");
-    }
-
-    // Update the in-memory list by removing the deleted user
-    users.erase(std::remove_if(users.begin(), users.end(),
-                [&](User &u) { return u.username == usernameToDelete; }), users.end());
-
-    Serial.println("User " + usernameToDelete + " fully removed from memory and file.");
-    
-    Serial.println("Refreshing fingerprint IDs after deletion...");
-    refreshFingerprintIDs();
-
-    Serial.println("Completed deleteUserFromFile function.");
+  SPIFFS.remove("/users.txt");
+  SPIFFS.rename("/users_temp.txt", "/users.txt");
+  printUsersFile();
 }
-
 
 void printUsersFile() {
   File file = SPIFFS.open("/users.txt", "r");
@@ -1427,44 +1339,48 @@ void handleLogin() {
 
 // Funkcija za dodavanje korisnika
 void handleAddUser() {
-    Serial.println("Entering handleAddUser...");
-    DynamicJsonDocument jsonResponse(1024);
-    JsonObject errors = jsonResponse.createNestedObject("errors");
-    bool success = true;
+  Serial.println("Entering handleAddUser...");
+  DynamicJsonDocument jsonResponse(1024);
+  JsonObject errors = jsonResponse.createNestedObject("errors");
+  bool success = true;
 
-    String enteredUsername = server.arg("username");
-    String selectedVoiceCommand = server.arg("voiceCommand");
-    String fingerprintAdded = getFingerprintAdded() ? "true" : "false";
+  String enteredUsername = server.arg("username");
+  String selectedVoiceCommand = server.arg("voiceCommand");
+  String fingerprintAdded = server.arg("fingerprint");  // Pretpostavljamo da je 'fingerprint' argument prisutan kad je otisak dodat
 
+  
+      // Retrieve the fingerprintAdded status from SPIFFS
+    fingerprintAdded = getFingerprintAdded() ? "true" : "false";
     Serial.print("Retrieved fingerprintAdded from SPIFFS in handleAddUser(): ");
     Serial.println(fingerprintAdded);
 
-    // Validacija CAPTCHA
-    if (!server.hasArg("captcha")) {
-        errors["captcha"] = true;
-        success = false;
-    }
+  // Validacija CAPTCHA
+  if (!server.hasArg("captcha")) {
+    errors["captcha"] = true;
+    success = false;
+  }
 
-    // Validacija korisničkog imena
-    if (enteredUsername == "") {
-        errors["username"] = "Please enter a username.";
-        success = false;
-    } else if (!isValidUsername(enteredUsername)) {
-        errors["username"] = "Invalid username! Please follow the rules.";
-        success = false;
-    } else {
-        bool userExists = false;
-        for (User &u : users) {
-            if (u.username == enteredUsername) {
-                userExists = true;
-                break;
-            }
-        }
-        if (userExists) {
-            errors["username"] = "Error: User already exists!";
-            success = false;
-        }
+  // Validacija korisničkog imena
+  if (enteredUsername == "") {
+    errors["username"] = "Please enter a username.";
+    success = false;
+  } else if (!isValidUsername(enteredUsername)) {
+    errors["username"] = "Invalid username! Please follow the rules.";
+    success = false;
+  } else {
+    // Provera da li korisnik već postoji
+    bool userExists = false;
+    for (User &u : users) {
+      if (u.username == enteredUsername) {
+        userExists = true;
+        break;
+      }
     }
+    if (userExists) {
+      errors["username"] = "Error: User already exists!";
+      success = false;
+    }
+  }
 
     // Validacija otiska prsta
     if (fingerprintAdded != "true") {
@@ -1478,44 +1394,30 @@ void handleAddUser() {
         success = false;
     }
 
-    if (!success) {
-        jsonResponse["success"] = false;
-        String response;
-        serializeJson(jsonResponse, response);
-        server.send(200, "application/json", response);
-        return;
-    }
-
-    // Korišćenje već dodeljenog ID-a 
-    Serial.printf("Current Fingerprint ID before saving: %d\n", fingerprintID);
-
-    String fingerprintID_handleAddUser = String(fingerprintID); // Dodeljen u `assignFingerprintID`
-    String newPin = generateUniquePin();
-
-    // Kreiraj novog korisnika i dodaj u listu
-    User newUser = {enteredUsername, newPin, fingerprintID_handleAddUser, selectedVoiceCommand};
-    users.push_back(newUser);
-    saveUserToFile(enteredUsername, newPin, fingerprintID_handleAddUser, selectedVoiceCommand);
-
-    Serial.printf("Added user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
-                  enteredUsername.c_str(), newPin.c_str(), fingerprintID_handleAddUser.c_str(), selectedVoiceCommand.c_str());
-
-    // Resetuj fingerprint status
-    fingerprintAdded = "false";
-    saveFingerprintAdded(false);
-
-    // Odgovor za klijenta
-    jsonResponse["success"] = true;
-    jsonResponse["pin"] = newPin;
+  if (!success) {
+    jsonResponse["success"] = false;
     String response;
     serializeJson(jsonResponse, response);
     server.send(200, "application/json", response);
+    return;
+  }
 
-     Serial.println("Refreshing fingerprint IDs after adding user...");
-    refreshFingerprintIDs();
+   // Ako je validacija uspešna, dodajte korisnika
+    fingerprintAdded = "false";
+    saveFingerprintAdded(false);  // Reset the status in SPIFFS  
+    String newPin = generateUniquePin();
+    String fingerprintID = String(generateNewFingerprintID()); // Generišemo jedinstveni fingerprint ID
+    User newUser = {enteredUsername, newPin, fingerprintID, selectedVoiceCommand};
+    users.push_back(newUser);
+    saveUserToFile(enteredUsername, newPin, fingerprintID, selectedVoiceCommand);
 
+  // Vratite odgovor o uspehu
+  jsonResponse["success"] = true;
+  jsonResponse["pin"] = newPin;
+  String response;
+  serializeJson(jsonResponse, response);
+  server.send(200, "application/json", response);
 }
-
 
 
 
@@ -1582,33 +1484,30 @@ bool isValidPassword(String password) {
 
 // Funkcija za brisanje korisnika
 void handleUserDeletion() {
-    if (server.hasArg("username")) {
-        String usernameToDelete = server.arg("username");
+  if (server.hasArg("username")) {
+    String usernameToDelete = server.arg("username");
 
-        // Prevent deletion of the admin user
-        if (usernameToDelete == "admin") {
-            server.send(200, "text/html",
-                        "<html><body><script>alert('Admin user cannot be deleted!');</script>"
-                        "<meta http-equiv='refresh' content='0;url=/' /></body></html>");
-            return;
-        }
-
-        // Call deleteUserFromFile first to handle file and fingerprint deletion
-        deleteUserFromFile(usernameToDelete);
-
-        // Now remove the user from the in-memory list
-        for (auto it = users.begin(); it != users.end(); ++it) {
-            if (it->username == usernameToDelete) {
-                users.erase(it);
-                break;
-            }
-        }
-
-        // Refresh the admin page
-        showAdminPage();
+    // Ne dozvoli brisanje admin korisnika
+    if (usernameToDelete == "admin") {
+      server.send(200, "text/html",
+                  "<html><body><script>alert('Admin user cannot be deleted!');</script>"
+                  "<meta http-equiv='refresh' content='0;url=/' /></body></html>");
+      return;
     }
-}
 
+    for (auto it = users.begin(); it != users.end(); ++it) {
+      if (it->username == usernameToDelete) {
+        users.erase(it);
+        break;
+      }
+    }
+
+    // Izbriši korisnika iz fajla
+    deleteUserFromFile(usernameToDelete);
+
+    showAdminPage();
+  }
+}
 
 
 // Funkcija za prikaz admin panela
@@ -1764,8 +1663,6 @@ void setup() {
   Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
   Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
   Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate); 
-      refreshFingerprintIDs();
-
   
 }
 
