@@ -1215,11 +1215,31 @@ void showAddUserPage() {
         
        let ws;
 
+       function resetFingerprintButton() {
+          const fingerprintButton = document.getElementById("add-fingerprint");
+          fingerprintButton.disabled = false; // Omogućava dugme
+          fingerprintButton.style.backgroundColor = "#00d4ff"; // Postavlja plavu boju
+          fingerprintButton.style.cursor = "pointer"; // Postavlja kursor na pokazivač
+      }
+
+      function disableFingerprintButton() {
+          const fingerprintButton = document.getElementById("add-fingerprint");
+          fingerprintButton.disabled = true; // Onemogućava dugme
+          fingerprintButton.style.backgroundColor = "#aaa7ad"; // Postavlja sivu boju
+          fingerprintButton.style.cursor = "not-allowed"; // Menja kursor na nedostupno
+      }
+
+
+
        window.onload = function() {
-            fetch('/resetFingerprintStatus', { method: 'POST' })
-                .then(response => console.log("Fingerprint status reset."))
-                .catch(err => console.error("Error resetting fingerprint status:", err));
-        };
+          fetch('/resetFingerprintStatus', { method: 'POST' })
+              .then(response => console.log("Fingerprint status reset."))
+              .catch(err => console.error("Error resetting fingerprint status:", err));
+      
+          // Resetovanje dugmeta
+          resetFingerprintButton();
+      };
+
         
       window.onbeforeunload = function() {
           fetch('/resetFingerprintStatus', { method: 'POST' });
@@ -1231,7 +1251,7 @@ void showAddUserPage() {
     .then(response => response.json())
     .then(data => {
         if (data.fingerprintAdded === true) {
-            fetch('/resetFingerprintStatus', { method: 'POST' });
+            disableFingerprintButton(); // Onemogućava dugme ako je otisak već dodat
         }
     })
     .catch(err => console.error("Error checking fingerprint status:", err));
@@ -1266,7 +1286,7 @@ void showAddUserPage() {
         }
 
 
-        function updateProgress(step, message) {
+       function updateProgress(step, message) {
             const progressBar = document.querySelector('[role="progressbar"]');
             let targetValue;
             
@@ -1282,6 +1302,8 @@ void showAddUserPage() {
                     break;
                 case 3:
                     targetValue = 100;
+                    // Kada je registracija završena (step 3)
+                   disableFingerprintButton(); // Onemogućava dugme
                     break;
                 default:
                     targetValue = 0;
@@ -1308,6 +1330,7 @@ void showAddUserPage() {
         
             animateProgress();
         }
+
 
 
         
@@ -1345,6 +1368,8 @@ void showAddUserPage() {
                         if (response.success) {
                             alert('New User Added Successfully! PIN: ' + response.pin);
                             form.reset(); // Reset form fields
+                            resetFingerprintButton(); // Resetuje dugme za dodavanje otiska
+
                         } else {
                             displayErrorMessages(response.errors);
                         }
