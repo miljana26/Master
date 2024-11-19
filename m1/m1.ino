@@ -653,6 +653,22 @@ void resetRegistrationProcess() {
     // Takođe, resetujte bilo koje delimične podatke ili bafer ako je potrebno
 }
 
+void handleGetFingerprintStatus() {
+    DynamicJsonDocument jsonResponse(1024);
+    jsonResponse["fingerprintAdded"] = getFingerprintAdded();
+    String response;
+    serializeJson(jsonResponse, response);
+    server.send(200, "application/json", response);
+}
+
+
+void handleResetFingerprintStatus() {
+    saveFingerprintAdded(false);  // Ažuriranje statusa u SPIFFS ili drugom skladištu
+    Serial.println("Fingerprint status reset to false.");
+    server.send(200, "application/json", "{\"success\": true}");
+}
+
+
 
 // Funkcija za resetovanje napretka ako korisnik ne uspe
 void resetProgress() {
@@ -1199,6 +1215,30 @@ void showAddUserPage() {
         
        let ws;
 
+       window.onload = function() {
+            fetch('/resetFingerprintStatus', { method: 'POST' })
+                .then(response => console.log("Fingerprint status reset."))
+                .catch(err => console.error("Error resetting fingerprint status:", err));
+        };
+        
+      window.onbeforeunload = function() {
+          fetch('/resetFingerprintStatus', { method: 'POST' });
+      };
+
+
+
+       fetch('/getFingerprintStatus')
+    .then(response => response.json())
+    .then(data => {
+        if (data.fingerprintAdded === true) {
+            fetch('/resetFingerprintStatus', { method: 'POST' });
+        }
+    })
+    .catch(err => console.error("Error checking fingerprint status:", err));
+
+
+
+
         function showFingerprintModal() {
         // Ako postoji otvorena WebSocket veza, zatvori je
             if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1743,6 +1783,7 @@ void setup() {
 
   // Ruta za obradu Add User forme (POST zahtev)
   server.on("/addUser", HTTP_POST, handleAddUser);
+  server.on("/resetFingerprintStatus", HTTP_POST, handleResetFingerprintStatus);
   server.on("/login", HTTP_POST, handleLogin);
   server.on("/delete", HTTP_GET, handleUserDeletion);
   server.on("/logout", HTTP_GET, handleLogout);
