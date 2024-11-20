@@ -225,7 +225,7 @@ String getFormattedTime() {
 
 // Funkcija za unos PIN-a
 void handlePasswordInput() {
-  char key = keypad.getKey();  // Čitanje unosa sa fizičkog tastature
+  char key = keypad.getKey();  // Čitanje unosa sa tastature
 
   if (key) {
     if (!isEnteringPin) {
@@ -233,17 +233,28 @@ void handlePasswordInput() {
       isWaitingForMotion = false;  // Više ne čekamo pokret
     }
 
-    if (key == '#') {
+    if (key == '#') {  // Kada je unos završen
       Serial.print("Unos završen: ");
       Serial.println(enteredPassword);
-      if (enteredPassword == correctPassword) {
+
+      // Pronađi korisnika čiji je PIN unet
+      User *currentUser = nullptr;
+      for (User &user : users) {
+        if (user.pin == enteredPassword) {  // Ako uneseni PIN odgovara korisničkom PIN-u
+          currentUser = &user;
+          break;
+        }
+      }
+
+      if (currentUser) {
+        // PIN je ispravan
         Serial.println("Ispravan PIN!");
-        displayWelcomeMessage(loggedInUser.username);  // Prikaži poruku sa imenom korisnika
-        moveServo();  // Otvaranje vrata (servo motor)
+        displayWelcomeMessage(currentUser->username);  // Prikaži poruku s imenom korisnika
+        moveServo();  // Otvaranje vrata
         delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
-        resetPIRDetection();  // Resetuj sistem na "Waiting for motion" sa normalnim fontom
+        resetPIRDetection();  // Resetuj sistem na početak
       } else {
-        // Logika za pogrešan PIN
+        // PIN nije ispravan
         attempts++;
         if (attempts >= maxAttempts) {
           Serial.println("Previše pogrešnih pokušaja!");
@@ -260,14 +271,15 @@ void handlePasswordInput() {
         }
       }
 
-      // Resetuj PIN unos i na OLED-u i na web stranici
+      // Resetuj unos lozinke
       enteredPassword = "";
       webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"\"}");  // Obriši unos PIN-a na web stranici
 
     } else if (key == '*') {  // Briši poslednji uneti karakter
       if (enteredPassword.length() > 0) {
         enteredPassword.remove(enteredPassword.length() - 1);
-        // Ažuriraj prikaz na OLED-u
+
+        // Ažuriraj OLED ekran
         display.clearDisplay();
         display.setCursor(0, 0);
         display.print("Enter password:");
@@ -277,14 +289,14 @@ void handlePasswordInput() {
         }
         display.display();
 
-        // Ažuriraj prikaz na web stranici u realnom vremenu
+        // Ažuriraj prikaz na web stranici
         webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
       }
 
     } else {
-      enteredPassword += key;  // Dodaj uneseni karakter u lozinku
+      enteredPassword += key;  // Dodaj uneseni karakter
 
-      // Ažuriraj prikaz na OLED-u
+      // Ažuriraj OLED ekran
       display.clearDisplay();
       display.setCursor(0, 0);
       display.print("Enter password:");
@@ -294,11 +306,12 @@ void handlePasswordInput() {
       }
       display.display();
 
-      // Ažuriraj prikaz na web stranici u realnom vremenu
+      // Ažuriraj prikaz na web stranici
       webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
     }
   }
 }
+
 
 
 void handlePIRSensor() {
@@ -1692,7 +1705,7 @@ void showAdminPage() {
   server.sendHeader("Expires", "-1");
 
   String page = "<html><head><style>"
-                "body { background-color: #0399FA; font-family: Arial; }"
+                " body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
                 ".container { display: flex; justify-content: center; align-items: center; flex-direction: column; height: 100vh; }"
                 "table { width: 60%; border-collapse: collapse; margin: 20px auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 0 20px rgba(0, 0, 0, 0.1); }"
                 "th, td { padding: 15px; text-align: left; border-bottom: 1px solid #ddd; }"
