@@ -222,6 +222,20 @@ String getFormattedTime() {
   return String(timeStr);
 }
 
+int getFingerprintID() {
+  int fingerprintID = finger.getImage();
+  if (fingerprintID == FINGERPRINT_OK) {
+    fingerprintID = finger.image2Tz();
+    if (fingerprintID == FINGERPRINT_OK) {
+      fingerprintID = finger.fingerFastSearch();
+      if (fingerprintID == FINGERPRINT_OK) {
+        return finger.fingerID;
+      }
+    }
+  }
+  return -1; // Nema prepoznatog otiska
+}
+
 
 // Funkcija za unos PIN-a
 void handlePasswordInput() {
@@ -308,6 +322,40 @@ void handlePasswordInput() {
 
       // Ažuriraj prikaz na web stranici
       webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
+    }
+  }
+
+  // Dodaj logiku za otisak prsta
+  int fingerprintID = getFingerprintID();  // Proverava da li je otisak prsta prepoznat
+
+  if (fingerprintID > 0) {
+    Serial.print("Otisak prsta prepoznat: ID ");
+    Serial.println(fingerprintID);
+
+    // Pronađi korisnika na osnovu ID-a otiska
+    User *currentUser = nullptr;
+    for (User &user : users) {
+      if (user.fingerprintID == String(fingerprintID)) {
+        currentUser = &user;
+        break;
+      }
+    }
+
+    if (currentUser) {
+      Serial.print("Dobrodošao: ");
+      Serial.println(currentUser->username);
+      displayWelcomeMessage(currentUser->username);  // Prikaži poruku s imenom korisnika
+      moveServo();  // Otvaranje vrata
+      delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
+      resetPIRDetection();  // Resetuj sistem na početak
+    } else {
+      Serial.println("Otisak prsta nije povezan s korisnikom.");
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.print("Fingerprint invalid");
+      display.display();
+      delay(2000);  // Prikaži poruku o grešci 2 sekunde
+      resetPIRDetection();
     }
   }
 }
