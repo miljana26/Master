@@ -19,6 +19,17 @@
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
+#define DEBUG_WEBSOCKET true
+#define DEBUG_INTERVAL 5000
+#define DEBUG_REGISTRATION true
+#define REGISTRATION_DEBUG_INTERVAL 1000
+
+unsigned long lastDebugPrint = 0;
+unsigned long lastPing = 0;
+volatile int connectedClients = 0;
+#define MAX_CLIENTS 5
+bool clientConnected[MAX_CLIENTS] = {false};
+
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 const char *ssid = "MS";
@@ -71,7 +82,12 @@ bool noFingerMessageShown = false;
 bool registrationActive = false;
 bool fingerprintAdded = false;  // Praćenje statusa otiska prsta
 int fingerprintID = 0;  // Podesi početnu vrednost na 0 ili neku odgovarajuću vrednost
-
+volatile bool isAssigningId = false;
+volatile bool idAssigned = false;
+SemaphoreHandle_t fingerprintMutex;
+bool startRegistrationPending = false;
+unsigned long lastRegistrationDebug = 0;
+bool registrationDebugEnabled = true;
 
 
 HardwareSerial mySerial(2); // Koristi Serial2 za komunikaciju sa senzorom
@@ -123,29 +139,156 @@ void sendTelegramMessage(const String& message) {
     http.end();
 }
 
+void startFingerprintRegistration() {
+    Serial.println("\n[Registration] Starting new fingerprint registration...");
+    logRegistrationStatus("Before Registration Start");
+
+    registrationActive = true;
+    currentStep = 0;
+    isAssigningId = true;
+    idAssigned = false;
+    fingerprintAdded = false;
+    saveFingerprintAdded(false);
+    startRegistrationPending = false;
+
+    logRegistrationStatus("After Registration Start");
+
+    // Send initial progress update to all connected clients
+    DynamicJsonDocument doc(200);
+    doc["type"] = "progress";
+    doc["step"] = 0;
+    doc["message"] = "Place your finger on the sensor";
+    String response;
+    serializeJson(doc, response);
+    webSocket.broadcastTXT(response);
+}
+
+void logRegistrationStatus(const char* location) {
+    Serial.printf("\n=== Registration Status at %s ===\n", location);
+    Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
+    Serial.printf("startRegistrationPending: %s\n", startRegistrationPending ? "true" : "false");
+    Serial.printf("currentStep: %d\n", currentStep);
+    Serial.printf("isAssigningId: %s\n", isAssigningId ? "true" : "false");
+    Serial.printf("idAssigned: %s\n", idAssigned ? "true" : "false");
+}
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-    if (type == WStype_CONNECTED) {
-        Serial.printf("[%u] Connected!\n", num);
-        loggedInClientNum = num;
-    } else if (type == WStype_DISCONNECTED) {
-        Serial.printf("[%u] Disconnected!\n", num);
-        if (num == loggedInClientNum) {
-            loggedInClientNum = -1;
-        }
-    } else if (type == WStype_TEXT) {
-        String message = (char *)payload;
+    switch(type) {
+        case WStype_CONNECTED:
+            {
+                IPAddress ip = webSocket.remoteIP(num);
+                Serial.printf("[WebSocket] Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+                clientConnected[num] = true;
+                connectedClients++;
 
-        if (message == "start") {
-            startFingerprintRegistration();
-            Serial.println("Fingerprint registration started by client.");
-        } else if (message == "cancel") {
-            resetRegistrationProcess();
-            Serial.println("Fingerprint registration canceled by client.");
-        }
+                logRegistrationStatus("WebSocket Connected");
+
+                // Send initial status
+                DynamicJsonDocument doc(200);
+                doc["type"] = "status";
+                doc["message"] = "Connected successfully";
+                String response;
+                serializeJson(doc, response);
+                webSocket.sendTXT(num, response);
+            }
+            break;
+
+        case WStype_TEXT:
+            {
+                String text = String((char*)payload);
+                Serial.printf("[WebSocket] Received text from #%u: %s\n", num, text.c_str());
+
+                if (text == "start") {
+                    Serial.println("[WebSocket] Received start command");
+                    logRegistrationStatus("Before Start Command");
+
+                    if (!registrationActive) {
+                        Serial.println("[WebSocket] Starting new registration");
+                        registrationActive = true;
+                        currentStep = 0;
+                        isAssigningId = true;
+                        idAssigned = false;
+                        fingerprintAdded = false;
+                        saveFingerprintAdded(false);
+
+                        logRegistrationStatus("After Registration Start");
+
+                        // Send immediate confirmation
+                        DynamicJsonDocument progressDoc(200);
+                        progressDoc["type"] = "progress";
+                        progressDoc["step"] = 0;
+                        progressDoc["message"] = "Place your finger on the sensor";
+                        String progressResponse;
+                        serializeJson(progressDoc, progressResponse);
+                        webSocket.sendTXT(num, progressResponse);
+                    } else {
+                        Serial.println("[WebSocket] Registration already active, ignoring start command");
+                    }
+                }
+                else if (text == "cancel") {
+                    Serial.println("[WebSocket] Received cancel command");
+                    resetRegistrationProcess();
+                    
+                    DynamicJsonDocument doc(200);
+                    doc["type"] = "progress";
+                    doc["step"] = 0;
+                    doc["message"] = "Registration cancelled";
+                    String response;
+                    serializeJson(doc, response);
+                    webSocket.sendTXT(num, response);
+                }
+            }
+            break;
+
+        case WStype_DISCONNECTED:
+            Serial.printf("[WebSocket] Client #%u disconnected\n", num);
+            if (clientConnected[num]) {
+                clientConnected[num] = false;
+                connectedClients--;
+            }
+            logRegistrationStatus("WebSocket Disconnected");
+            break;
     }
 }
 
+
+void setupWebSocketRoutes() {
+    server.on("/ws-info", HTTP_GET, []() {
+        String info = "WebSocket Server Info:\n";
+        info += "Server IP: " + WiFi.localIP().toString() + "\n";
+        info += "Server Port: 81\n";
+        info += "Connected Clients: " + String(webSocket.connectedClients()) + "\n";
+        info += "WiFi Status: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "\n";
+        info += "RSSI: " + String(WiFi.RSSI()) + " dBm\n";
+        server.send(200, "text/plain", info);
+    });
+}
+
+
+void handleWebSocket() {
+    unsigned long currentMillis = millis();
+    
+    webSocket.loop();
+    
+    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
+        Serial.println("\n=== WebSocket Server Status ===");
+        Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
+        Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+        if (registrationActive) {
+            Serial.println("Registration is active");
+            Serial.printf("Current Step: %d\n", currentStep);
+        }
+        Serial.println("============================\n");
+        lastDebugPrint = currentMillis;
+    }
+    
+    if (currentMillis - lastPing > 15000) {
+        webSocket.broadcastPing();
+        lastPing = currentMillis;
+    }
+}
 
 String urlEncode(String str) {
   String encodedString = "";
@@ -222,24 +365,10 @@ String getFormattedTime() {
   return String(timeStr);
 }
 
-int getFingerprintID() {
-  int fingerprintID = finger.getImage();
-  if (fingerprintID == FINGERPRINT_OK) {
-    fingerprintID = finger.image2Tz();
-    if (fingerprintID == FINGERPRINT_OK) {
-      fingerprintID = finger.fingerFastSearch();
-      if (fingerprintID == FINGERPRINT_OK) {
-        return finger.fingerID;
-      }
-    }
-  }
-  return -1; // Nema prepoznatog otiska
-}
-
 
 // Funkcija za unos PIN-a
 void handlePasswordInput() {
-  char key = keypad.getKey();  // Čitanje unosa sa tastature
+  char key = keypad.getKey();  // Čitanje unosa sa fizičkog tastature
 
   if (key) {
     if (!isEnteringPin) {
@@ -247,28 +376,17 @@ void handlePasswordInput() {
       isWaitingForMotion = false;  // Više ne čekamo pokret
     }
 
-    if (key == '#') {  // Kada je unos završen
+    if (key == '#') {
       Serial.print("Unos završen: ");
       Serial.println(enteredPassword);
-
-      // Pronađi korisnika čiji je PIN unet
-      User *currentUser = nullptr;
-      for (User &user : users) {
-        if (user.pin == enteredPassword) {  // Ako uneseni PIN odgovara korisničkom PIN-u
-          currentUser = &user;
-          break;
-        }
-      }
-
-      if (currentUser) {
-        // PIN je ispravan
+      if (enteredPassword == correctPassword) {
         Serial.println("Ispravan PIN!");
-        displayWelcomeMessage(currentUser->username);  // Prikaži poruku s imenom korisnika
-        moveServo();  // Otvaranje vrata
+        displayWelcomeMessage(loggedInUser.username);  // Prikaži poruku sa imenom korisnika
+        moveServo();  // Otvaranje vrata (servo motor)
         delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
-        resetPIRDetection();  // Resetuj sistem na početak
+        resetPIRDetection();  // Resetuj sistem na "Waiting for motion" sa normalnim fontom
       } else {
-        // PIN nije ispravan
+        // Logika za pogrešan PIN
         attempts++;
         if (attempts >= maxAttempts) {
           Serial.println("Previše pogrešnih pokušaja!");
@@ -285,15 +403,14 @@ void handlePasswordInput() {
         }
       }
 
-      // Resetuj unos lozinke
+      // Resetuj PIN unos i na OLED-u i na web stranici
       enteredPassword = "";
       webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"\"}");  // Obriši unos PIN-a na web stranici
 
     } else if (key == '*') {  // Briši poslednji uneti karakter
       if (enteredPassword.length() > 0) {
         enteredPassword.remove(enteredPassword.length() - 1);
-
-        // Ažuriraj OLED ekran
+        // Ažuriraj prikaz na OLED-u
         display.clearDisplay();
         display.setCursor(0, 0);
         display.print("Enter password:");
@@ -303,14 +420,14 @@ void handlePasswordInput() {
         }
         display.display();
 
-        // Ažuriraj prikaz na web stranici
+        // Ažuriraj prikaz na web stranici u realnom vremenu
         webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
       }
 
     } else {
-      enteredPassword += key;  // Dodaj uneseni karakter
+      enteredPassword += key;  // Dodaj uneseni karakter u lozinku
 
-      // Ažuriraj OLED ekran
+      // Ažuriraj prikaz na OLED-u
       display.clearDisplay();
       display.setCursor(0, 0);
       display.print("Enter password:");
@@ -320,46 +437,11 @@ void handlePasswordInput() {
       }
       display.display();
 
-      // Ažuriraj prikaz na web stranici
+      // Ažuriraj prikaz na web stranici u realnom vremenu
       webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
     }
   }
-
-  // Dodaj logiku za otisak prsta
-  int fingerprintID = getFingerprintID();  // Proverava da li je otisak prsta prepoznat
-
-  if (fingerprintID > 0) {
-    Serial.print("Otisak prsta prepoznat: ID ");
-    Serial.println(fingerprintID);
-
-    // Pronađi korisnika na osnovu ID-a otiska
-    User *currentUser = nullptr;
-    for (User &user : users) {
-      if (user.fingerprintID == String(fingerprintID)) {
-        currentUser = &user;
-        break;
-      }
-    }
-
-    if (currentUser) {
-      Serial.print("Dobrodošao: ");
-      Serial.println(currentUser->username);
-      displayWelcomeMessage(currentUser->username);  // Prikaži poruku s imenom korisnika
-      moveServo();  // Otvaranje vrata
-      delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
-      resetPIRDetection();  // Resetuj sistem na početak
-    } else {
-      Serial.println("Otisak prsta nije povezan s korisnikom.");
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("Fingerprint invalid");
-      display.display();
-      delay(2000);  // Prikaži poruku o grešci 2 sekunde
-      resetPIRDetection();
-    }
-  }
 }
-
 
 
 void handlePIRSensor() {
@@ -514,10 +596,6 @@ void displayWelcomeMessage(String username) {
   display.display();
 }
 
-void startFingerprintRegistration() {
-    resetRegistrationProcess();
-    registrationActive = true;
-}
 
 // Generiše novi ID ako nije zauzet
 int generateNewFingerprintID() {
@@ -533,32 +611,37 @@ int generateNewFingerprintID() {
 
 
 bool checkIDAvailability(int id) {
-    Serial.print("Checking availability for ID ");
-    Serial.println(id);
-
-    int p = finger.loadModel(id);
+    uint8_t p = finger.loadModel(id);
     if (p == FINGERPRINT_OK) {
         Serial.println("ID " + String(id) + " is occupied.");
-        return false;  // ID je zauzet
+        return false;
     } else {
         Serial.println("ID " + String(id) + " is available.");
-        return true;  // ID je slobodan
+        return true;
     }
 }
+
 
 
 void assignFingerprintID() {
-    refreshFingerprintIDs();  // Osvežavanje pre dodeljivanja ID-a
-    fingerprintID = generateNewFingerprintID();
-    if (fingerprintID > 0) {
-        Serial.print("Assigned Fingerprint ID: ");
-        Serial.println(fingerprintID);
-    } else {
-        Serial.println("Error: No available Fingerprint ID.");
-        resetRegistrationProcess();
+    if (!isAssigningId || idAssigned) return;
+    
+    Serial.println("Starting ID assignment...");
+    refreshFingerprintIDs();  // Refresh IDs first
+    
+    for (int id = 1; id <= finger.capacity; id++) {
+        if (checkIDAvailability(id)) {
+            fingerprintID = id;
+            idAssigned = true;
+            isAssigningId = false;
+            Serial.printf("Assigned Fingerprint ID: %d\n", fingerprintID);
+            return;
+        }
     }
+    
+    Serial.println("No available IDs!");
+    resetRegistrationProcess();
 }
-
 
 
 void refreshFingerprintIDs() {
@@ -577,18 +660,26 @@ void refreshFingerprintIDs() {
 
 
 
-void sendProgressUpdate(int step, const char* message) {
+void sendProgressUpdate(int step, const String& message) {
+    if (!registrationActive) return;  // Don't send updates if not active
+
     DynamicJsonDocument doc(1024);
     doc["type"] = "progress";
     doc["step"] = step;
     doc["message"] = message;
+    
     String json;
     serializeJson(doc, json);
-
+    
     Serial.print("Sending progress update: ");
-    Serial.println(json);  // Ispisuje JSON podatke za debagovanje
-
-    webSocket.broadcastTXT(json);
+    Serial.println(json);
+    
+    if (webSocket.connectedClients() > 0) {
+        webSocket.broadcastTXT(json);
+    } else {
+        Serial.println("No WebSocket clients connected!");
+        resetRegistrationProcess();
+    }
 }
 
 
@@ -683,36 +774,36 @@ bool saveFingerprint() {
     int p = finger.storeModel(fingerprintID);
     if (p == FINGERPRINT_OK) {
         Serial.println("Fingerprint stored successfully.");
-        fingerprintAdded = "true";
-        saveFingerprintAdded(true);  // Save to SPIFFS
+        fingerprintAdded = true;
+        saveFingerprintAdded(true);
         Serial.println("Saved fingerprintAdded as true in SPIFFS");
-
-        // Test retrieval
-        bool testRetrieve = getFingerprintAdded();
-        Serial.print("Test retrieve after saving: ");
-        Serial.println(testRetrieve ? "true" : "false");
-        Serial.println("Refreshing fingerprint ID in saveFingerprint() function...");
-
-                refreshFingerprintIDs();  // Osvežavanje posle dodavanja otiska
-
-
+        refreshFingerprintIDs();
         return true;
     } else {
         Serial.println("Error storing fingerprint.");
-        fingerprintAdded = "false";
-        saveFingerprintAdded(false);  // Save to SPIFFS
         return false;
     }
 }
 
-
 void resetRegistrationProcess() {
+    Serial.println("Resetting registration process");
     registrationActive = false;
+    startRegistrationPending = false;
     currentStep = 0;
-    fingerprintAdded = "false";
-    //fingerprintID = 0; // Resetujte ID ako je potrebno
-    // Takođe, resetujte bilo koje delimične podatke ili bafer ako je potrebno
+    isAssigningId = false;
+    idAssigned = false;
+    
+    // Only reset fingerprintAdded if registration wasn't successful
+    if (!fingerprintAdded) {
+        saveFingerprintAdded(false);
+    }
+    
+    if (webSocket.connectedClients() > 0) {
+        String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
+        webSocket.broadcastTXT(resetMsg);
+    }
 }
+
 
 void handleGetFingerprintStatus() {
     DynamicJsonDocument jsonResponse(1024);
@@ -724,11 +815,17 @@ void handleGetFingerprintStatus() {
 
 
 void handleResetFingerprintStatus() {
-    saveFingerprintAdded(false);  // Ažuriranje statusa u SPIFFS ili drugom skladištu
-    Serial.println("Fingerprint status reset to false.");
-    server.send(200, "application/json", "{\"success\": true}");
+    if (!registrationActive) {
+        // Only reset if we're starting a new registration
+        fingerprintAdded = false;
+        saveFingerprintAdded(false);
+        Serial.println("Fingerprint status reset before new registration.");
+        server.send(200, "application/json", "{\"success\": true}");
+    } else {
+        Serial.println("Fingerprint reset prevented - registration active.");
+        server.send(200, "application/json", "{\"success\": false, \"message\": \"Registration in progress\"}");
+    }
 }
-
 
 
 // Funkcija za resetovanje napretka ako korisnik ne uspe
@@ -1153,14 +1250,23 @@ void showUserPage() {
 }
 
 
-void showAddUserPage() {
-  // Set headers to prevent caching
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "-1");
 
-  // Create the HTML content using R"rawliteral(...)"
-  String pageContent = R"rawliteral(
+void showAddUserPage() {
+    // Reset the fingerprint status when the page loads
+    fingerprintAdded = false;
+    saveFingerprintAdded(false);
+    registrationActive = false;
+    currentStep = 0;
+    isAssigningId = false;
+    idAssigned = false;
+
+    // Set headers to prevent caching
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
+
+    // Create the HTML content using R"rawliteral(...)"
+    String pageContent = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
@@ -1180,6 +1286,7 @@ void showAddUserPage() {
         .captcha-error label { color: red; }
         .add-fingerprint-button { width: 101%; padding: 15px; margin-top: 12px; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; border: none; }
         .add-fingerprint-button:hover { background-color: #00a3cc; }
+        .add-fingerprint-button:disabled { background-color: #aaa7ad; cursor: not-allowed; }
         .voice-command-label { color: #000000; font-size: 16px; margin-top: 15px; display: block; }
         .dropdown { width: 101%; padding: 15px; margin-top: 5px; border: none; border-radius: 5px; font-size: 16px; background-color: #112240; color: #ffffff; }
         .dropdown option { background-color: #112240; color: #ffffff; }
@@ -1193,20 +1300,56 @@ void showAddUserPage() {
         .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 160%; top: -30px; }
         .username-tooltip:hover .tooltiptext { visibility: visible; }
 
-         /* Stilovi za krug napretka */
+        /* Progress bar styles */
         @keyframes progress { 0% { --percentage: 0; } 100% { --percentage: var(--value); } }
         @property --percentage { syntax: '<number>'; inherits: true; initial-value: 0; }
         [role="progressbar"] { --percentage: var(--value); --primary: #369; --secondary: #adf; --size: 150px; animation: progress 2s 0.5s forwards; width: var(--size); aspect-ratio: 1; border-radius: 50%; position: relative; overflow: hidden; display: grid; place-items: center; box-shadow: 0 0 20px rgba(0, 255, 255, 0.4); } 
         [role="progressbar"]::before { content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: conic-gradient(var(--primary) calc(var(--percentage) * 1%), var(--secondary) 0); mask: radial-gradient(white 55%, transparent 0); mask-mode: alpha; -webkit-mask: radial-gradient(#0000 55%, #000 0); -webkit-mask-mode: alpha; } 
         [role="progressbar"]::after { counter-reset: percentage var(--value); content: counter(percentage) '%'; font-family: Helvetica, Arial, sans-serif; font-size: calc(var(--size) / 5); color: var(--primary); }
 
-        .modal { display: none; flex-direction: column; justify-content: center; align-items: center; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 260px; height: 260px; background-color: #1A4D8A; border-radius: 15px; padding: 20px; text-align: center; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); color: #00d4ff; }
+        /* Modal styles */
+        .modal { 
+            display: none; 
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
         
-        .close-button { margin-top: 15px; padding: 10px 20px; background-color: #00d4ff; color: #ffffff; border: none; border-radius: 5px; cursor: pointer; }
+        .modal-content {
+            background-color: #1A4D8A;
+            padding: 20px;
+            border-radius: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 260px;
+            text-align: center;
+        }
         
-        .close-button:hover { background-color: #00a3cc; }
+        .close-button { 
+            margin-top: 15px; 
+            padding: 10px 20px; 
+            background-color: #00d4ff; 
+            color: #ffffff; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+        }
+        
+        .close-button:hover { 
+            background-color: #00a3cc; 
+        }
 
-    </style>
+        #fingerprint-status {
+            color: #00d4ff;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
@@ -1214,7 +1357,6 @@ void showAddUserPage() {
         <div class="login-box">
             <h1>Add User</h1>
             <form id="addUserForm">
-                <!-- Username field with tooltip -->
                 <label for="username" class="username-label">Username:</label>
                 <div class="username-tooltip">
                     <input type="text" name="username" id="username" class="username-input-field">
@@ -1227,12 +1369,9 @@ void showAddUserPage() {
                 </div>
                 <div id="username-error" class="error-message"></div>
 
-                <!-- Add Fingerprint button -->
                 <input type="button" value="Add Fingerprint" id="add-fingerprint" class="add-fingerprint-button" onclick="showFingerprintModal()">
                 <div id="fingerprint-error" class="error-message"></div>
 
-
-                <!-- Voice Command dropdown -->
                 <label for="voice-command" class="voice-command-label">Voice command:</label>
                 <select name="voiceCommand" id="voice-command" class="dropdown">
                     <option value="">Please select a command</option>
@@ -1246,266 +1385,595 @@ void showAddUserPage() {
                 </select>
                 <div id="voice-command-error" class="error-message"></div>
 
-
-                <!-- CAPTCHA section -->
                 <div class="captcha" id="captcha-section">
                     <input type="checkbox" name="captcha" value="not_a_robot" id="captcha-checkbox">
                     <label for="captcha-checkbox">I am not a robot</label>
                 </div>
 
-                <!-- Submit button -->
                 <input type="submit" value="Add User" class="add-user-button">
             </form>
-
-            <!-- Back to Main Page link -->
             <a href="/" class="back-button">Back to Main Page</a>
         </div>
     </div>
+
+    <div id="debug-info" style="position: fixed; bottom: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; font-size: 12px;"></div>
+
     
-        <!-- Modal za registraciju otiska prsta -->
     <div id="fingerprint-modal" class="modal">
-        <p id="fingerprint-status">Registering Fingerprint...</p>
-        <div role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" style="--value: 0"></div>
-        <button class="close-button" onclick="closeFingerprintModal()">Close</button>
+        <div class="modal-content">
+            <p id="fingerprint-status">Ready to start...</p>
+            <div role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" style="--value: 0"></div>
+            <button class="close-button" onclick="closeFingerprintModal()">Close</button>
+            <div id="connection-error" style="color: red; margin-top: 10px; display: none;"></div>
+        </div>
     </div>
 
-
-
     <script>
+let ws;
+let registrationInProgress = false;
+let debugMode = true;
+let fingerprintAdded = false;
+
+setInterval(() => {
+    if (ws) {
+        console.log('WebSocket state:', {
+            readyState: ws.readyState,
+            bufferedAmount: ws.bufferedAmount,
+            protocol: ws.protocol,
+            url: ws.url
+        });
+    }
+}, 5000);
+
+let wsStatusInterval = setInterval(() => {
+    if (ws) {
+        const states = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+        console.log('WebSocket status:', {
+            state: states[ws.readyState],
+            readyState: ws.readyState,
+            url: ws.url
+        });
+    }
+}, 3000);
+
+async function resolveServerIP() {
+    try {
+        // Make a request to get server info
+        const response = await fetch('/ws-info');
+        const serverInfo = await response.text();
         
-        
-       let ws;
-
-       function resetFingerprintButton() {
-          const fingerprintButton = document.getElementById("add-fingerprint");
-          fingerprintButton.disabled = false; // Omogućava dugme
-          fingerprintButton.style.backgroundColor = "#00d4ff"; // Postavlja plavu boju
-          fingerprintButton.style.cursor = "pointer"; // Postavlja kursor na pokazivač
-      }
-
-      function disableFingerprintButton() {
-          const fingerprintButton = document.getElementById("add-fingerprint");
-          fingerprintButton.disabled = true; // Onemogućava dugme
-          fingerprintButton.style.backgroundColor = "#aaa7ad"; // Postavlja sivu boju
-          fingerprintButton.style.cursor = "not-allowed"; // Menja kursor na nedostupno
-      }
-
-
-
-       window.onload = function() {
-          fetch('/resetFingerprintStatus', { method: 'POST' })
-              .then(response => console.log("Fingerprint status reset."))
-              .catch(err => console.error("Error resetting fingerprint status:", err));
-      
-          // Resetovanje dugmeta
-          resetFingerprintButton();
-      };
-
-        
-      window.onbeforeunload = function() {
-          fetch('/resetFingerprintStatus', { method: 'POST' });
-      };
-
-
-
-       fetch('/getFingerprintStatus')
-    .then(response => response.json())
-    .then(data => {
-        if (data.fingerprintAdded === true) {
-            disableFingerprintButton(); // Onemogućava dugme ako je otisak već dodat
+        // Extract IP from the server info
+        const ipMatch = serverInfo.match(/Server IP: ([\d\.]+)/);
+        if (ipMatch && ipMatch[1]) {
+            console.log('Resolved server IP:', ipMatch[1]);
+            return ipMatch[1];
         }
-    })
-    .catch(err => console.error("Error checking fingerprint status:", err));
+        throw new Error('Could not extract IP from server info');
+    } catch (error) {
+        console.error('Failed to resolve server IP:', error);
+        return null;
+    }
+}
 
+function updateConnectionStatus(connected) {
+    const status = document.getElementById('fingerprint-status');
+    if (status) {
+        if (connected) {
+            status.style.color = '#00d4ff';
+            status.innerText = 'Connected to device';
+        } else {
+            status.style.color = 'red';
+            status.innerText = 'Disconnected from device';
+        }
+    }
+}
 
+function verifyConnection() {
+    const currentIP = window.location.hostname;
+    console.log('Current page IP:', currentIP);
+    document.getElementById('debug-info').textContent = `Connected to: ${currentIP}`;
+}
 
+window.addEventListener('load', verifyConnection);
 
-        function showFingerprintModal() {
-        // Ako postoji otvorena WebSocket veza, zatvori je
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.close();
+document.addEventListener('DOMContentLoaded', function() {
+    const closeButton = document.querySelector('.close-button');
+    if (closeButton) {
+        closeButton.addEventListener('click', function(e) {
+            e.preventDefault();
+            console.log('Close button clicked');
+            closeFingerprintModal();
+        });
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            const modal = document.getElementById('fingerprint-modal');
+            if (modal && modal.style.display === 'flex') {
+                console.log('Escape key pressed, closing modal');
+                closeFingerprintModal();
             }
-            
-            const progressBar = document.querySelector('[role="progressbar"]');
-            progressBar.style.setProperty('--value', 0); // Reset progresivne trake na 0%
-            progressBar.setAttribute('aria-valuenow', 0); // Resetiraj trenutnu vrednost
-            document.getElementById('fingerprint-status').innerText = 'Assigning ID...'; // Resetiraj poruku
-            document.getElementById('fingerprint-modal').style.display = 'flex';
-            currentStep = 0;
+        }
+    });
+});
+
+function log(message, isError = false) {
+    if (debugMode) {
+        const method = isError ? console.error : console.log;
+        method(`[Fingerprint Registration] ${message}`);
+    }
+}
+
+async function checkESP32Connection() {
+    try {
+        log('Checking ESP32 connection...');
+        const response = await fetch('/', {
+            method: 'HEAD',
+            cache: 'no-cache'
+        });
+        if (response.ok) {
+            log('ESP32 is reachable');
+            return true;
+        }
+        log('ESP32 is not reachable', true);
+        return false;
+    } catch (error) {
+        log(`ESP32 connection check failed: ${error}`, true);
+        return false;
+    }
+}
+
+function initializeWebSocket(wsUrl, status) {
+    try {
+        ws = new WebSocket(wsUrl);
         
-            // Ponovno otvaranje WebSocket veze
-            ws = new WebSocket('ws://' + window.location.hostname + ':81/');
-            ws.onopen = function() {
-                ws.send("start"); // Pokreni proces registracije
-            };
-            ws.onmessage = function(event) {
+        ws.onopen = function() {
+            console.log('WebSocket Connected successfully');
+            status.innerText = 'Connected, starting registration...';
+            status.style.color = '#00d4ff';
+            
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    console.log('Sending start command to server');
+                    ws.send('start');
+                    registrationInProgress = true;
+                } else {
+                    console.error('WebSocket not ready for start command');
+                    status.innerText = 'Connection error. Please try again.';
+                    status.style.color = 'red';
+                }
+            }, 500);
+        };
+
+        // Rest of the WebSocket handlers remain the same...
+        ws.onmessage = function(event) {
+            console.log('Received from server:', event.data);
+            try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'progress') {
                     updateProgress(data.step, data.message);
+                } else if (data.type === 'error') {
+                    handleConnectionError(data.message);
                 }
-            };
+            } catch (error) {
+                console.error('Error parsing message:', error);
+            }
+        };
+
+        ws.onerror = function(error) {
+            console.error('WebSocket error:', error);
+            status.innerText = 'Connection error occurred';
+            status.style.color = 'red';
+        };
+
+        ws.onclose = function(event) {
+            console.log('WebSocket connection closed:', event.code, event.reason);
+            if (registrationInProgress) {
+                status.innerText = 'Connection lost';
+                status.style.color = 'red';
+            }
+        };
+    } catch (error) {
+        console.error('Error creating WebSocket:', error);
+        status.innerText = 'Failed to create connection';
+        status.style.color = 'red';
+    }
+}
+
+
+function setupWebSocketHandlers() {
+    ws.onopen = function() {
+        log('WebSocket connected successfully');
+        document.getElementById('fingerprint-status').innerText = 'Connected. Starting registration...';
+        
+        setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                log('Sending start command');
+                ws.send("start");
+            } else {
+                log('WebSocket not ready for start command', true);
+                handleConnectionError('Connection not ready');
+            }
+        }, 500);
+    };
+
+    ws.onclose = function(event) {
+        log(`WebSocket closed: Code ${event.code}, Reason: ${event.reason}`);
+        if (registrationInProgress) {
+            handleConnectionError('Connection closed unexpectedly');
         }
+    };
 
+    ws.onerror = function(error) {
+        log(`WebSocket error: ${error}`, true);
+        handleConnectionError('Connection error occurred');
+    };
 
-       function updateProgress(step, message) {
-            const progressBar = document.querySelector('[role="progressbar"]');
-            let targetValue;
+    ws.onmessage = function(event) {
+        try {
+            log(`Received message: ${event.data}`);
+            const data = JSON.parse(event.data);
             
-            switch (step) {
-                case 0:
-                    targetValue = 25;
+            switch(data.type) {
+                case 'progress':
+                    updateProgress(data.step, data.message);
                     break;
-                case 1:
-                    targetValue = 50;
+                case 'cancel':
+                    handleCancelConfirmation();
                     break;
-                case 2:
-                    targetValue = 75;
+                case 'error':
+                    handleConnectionError(data.message);
                     break;
-                case 3:
-                    targetValue = 100;
-                    // Kada je registracija završena (step 3)
-                   disableFingerprintButton(); // Onemogućava dugme
+                case 'fingerprint':
+                    handleFingerprintMessage(data);
                     break;
                 default:
-                    targetValue = 0;
+                    log(`Unhandled message type: ${data.type}`);
             }
-        
-            let currentValue = parseInt(progressBar.style.getPropertyValue('--value')) || 0;
-            if (!currentValue) {
-                currentValue = parseInt(progressBar.getAttribute('aria-valuenow')) || 0;
-            }
-        
-            const increment = currentValue < targetValue ? 1 : -1;
-            
-            function animateProgress() {
-                if (currentValue === targetValue) {
-                    document.getElementById('fingerprint-status').innerText = message;
-                    return;
-                }
-        
-                currentValue += increment;
-                progressBar.style.setProperty('--value', currentValue);
-                progressBar.setAttribute('aria-valuenow', currentValue);
-                setTimeout(animateProgress, 10);
-            }
-        
-            animateProgress();
+        } catch (error) {
+            log(`Error parsing message: ${error}`, true);
+            handleConnectionError('Invalid response from device');
+        }
+    };
+}
+
+function handleFingerprintMessage(data) {
+    const { status, message } = data;
+    document.getElementById('fingerprint-status').innerText = message;
+    
+    if (status === 'waiting') {
+        document.getElementById('fingerprint-status').style.color = '#00d4ff';
+    } else if (status === 'error') {
+        document.getElementById('fingerprint-status').style.color = 'red';
+        setTimeout(() => {
+            document.getElementById('fingerprint-status').style.color = '#00d4ff';
+        }, 2000);
+    }
+}
+
+function handleCancelConfirmation() {
+    registrationInProgress = false;
+    document.getElementById('fingerprint-modal').style.display = 'none';
+    if (!fingerprintAdded) {
+        resetFingerprintButton();
+    }
+}
+
+
+function showFingerprintModal() {
+    console.log('Showing fingerprint modal...');
+    
+    if (registrationInProgress) {
+        console.log('Registration already in progress');
+        return;
+    }
+
+    const modal = document.getElementById('fingerprint-modal');
+    const progressBar = document.querySelector('[role="progressbar"]');
+    const status = document.getElementById('fingerprint-status');
+    
+    modal.style.display = 'flex';
+    progressBar.style.setProperty('--value', '0');
+    status.innerText = 'Resolving connection...';
+
+    // Close existing WebSocket if any
+    if (ws) {
+        console.log('Closing existing WebSocket connection');
+        ws.close();
+        ws = null;
+    }
+
+    // Resolve the server IP first
+    resolveServerIP().then(serverIP => {
+        if (!serverIP) {
+            throw new Error('Could not resolve server IP');
         }
 
+        // Use the resolved IP for WebSocket connection
+        const wsUrl = `ws://${serverIP}:81`;
+        console.log('Attempting WebSocket connection to:', wsUrl);
 
-
+        ws = new WebSocket(wsUrl);
         
-      
-        // Funkcija za zatvaranje modala na dugme "Close"
-         function closeFingerprintModal() {
-            document.getElementById('fingerprint-modal').style.display = 'none';
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send("cancel"); // Obavesti ESP32 da resetuje proces registracije
-                ws.close(); // Zatvori WebSocket vezu
+        ws.onopen = function() {
+            console.log('WebSocket Connected successfully to', wsUrl);
+            status.innerText = 'Connected, starting registration...';
+            status.style.color = '#00d4ff';
+            
+            // Update debug info
+            const debugInfo = document.getElementById('debug-info');
+            if (debugInfo) {
+                debugInfo.textContent = `Connected to: ${serverIP} (resolved from ${window.location.hostname})`;
             }
+            
+            setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    console.log('Sending start command to server');
+                    ws.send('start');
+                    registrationInProgress = true;
+                } else {
+                    console.error('WebSocket not ready for start command');
+                    status.innerText = 'Connection error. Please try again.';
+                    status.style.color = 'red';
+                }
+            }, 500);
+        };
+
+        ws.onmessage = function(event) {
+            console.log('Received from server:', event.data);
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'progress') {
+                    updateProgress(data.step, data.message);
+                } else if (data.type === 'error') {
+                    handleConnectionError(data.message);
+                }
+            } catch (error) {
+                console.error('Error parsing message:', error);
+            }
+        };
+
+        ws.onerror = function(error) {
+            console.error('WebSocket error:', error);
+            status.innerText = 'Connection error occurred';
+            status.style.color = 'red';
+        };
+
+        ws.onclose = function(event) {
+            console.log('WebSocket connection closed:', event.code, event.reason);
+            if (registrationInProgress) {
+                status.innerText = 'Connection lost';
+                status.style.color = 'red';
+            }
+        };
+    }).catch(error => {
+        console.error('Connection error:', error);
+        status.innerText = 'Failed to resolve server address';
+        status.style.color = 'red';
+    });
+}
+
+// Add connection verification on page load
+window.addEventListener('load', async () => {
+    const serverIP = await resolveServerIP();
+    const debugInfo = document.getElementById('debug-info');
+    if (debugInfo) {
+        debugInfo.textContent = `Page loaded from: ${window.location.hostname} (Server IP: ${serverIP || 'unresolved'})`;
+    }
+});
+
+function closeFingerprintModal() {
+    console.log('Closing fingerprint modal...');
+    
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        console.log('Sending cancel command to server...');
+        ws.send("cancel");
+    }
+    
+    document.getElementById('fingerprint-modal').style.display = 'none';
+    const progressBar = document.querySelector('[role="progressbar"]');
+    if (progressBar) {
+        progressBar.style.setProperty('--value', '0');
+        progressBar.setAttribute('aria-valuenow', '0');
+    }
+    document.getElementById('fingerprint-status').innerText = 'Ready to start...';
+    
+    resetRegistrationState();
+    
+    const fingerprintButton = document.getElementById('add-fingerprint');
+    if (fingerprintButton && !fingerprintAdded) {
+        resetFingerprintButton();
+    }
+}
+
+function handleConnectionError(message) {
+    console.error('Connection error:', message);
+    const status = document.getElementById('fingerprint-status');
+    if (status) {
+        status.innerText = `Error: ${message}`;
+        status.style.color = 'red';
+    }
+    registrationInProgress = false;
+}
+
+function resetRegistrationState() {
+    console.log('Resetting registration state...');
+    registrationInProgress = false;
+    
+    if (ws) {
+        try {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send("cancel");
+                ws.close();
+            }
+        } catch (e) {
+            console.error('Error during WebSocket cleanup:', e);
+        }
+        ws = null;
+    }
+}
+
+function updateProgress(step, message) {
+    console.log(`Updating progress - Step: ${step}, Message: ${message}`);
+    const progressBar = document.querySelector('[role="progressbar"]');
+    const status = document.getElementById('fingerprint-status');
+    
+    if (!progressBar || !status) {
+        console.error('Progress elements not found');
+        return;
+    }
+    
+    let targetValue;
+    switch (step) {
+        case 0: targetValue = 25; break;
+        case 1: targetValue = 50; break;
+        case 2: targetValue = 75; break;
+        case 3: 
+            targetValue = 100;
+            registrationInProgress = false;
+            fingerprintAdded = true;
+            break;
+        default: targetValue = 0;
+    }
+
+    progressBar.style.setProperty('--value', targetValue.toString());
+    progressBar.setAttribute('aria-valuenow', targetValue.toString());
+    status.innerText = message;
+    
+    console.log(`Progress updated - Value: ${targetValue}, Message: ${message}`);
+}
+
+function resetFingerprintButton() {
+    const fingerprintButton = document.getElementById("add-fingerprint");
+    fingerprintButton.disabled = false;
+    fingerprintButton.style.backgroundColor = "#00d4ff";
+    fingerprintButton.style.cursor = "pointer";
+}
+
+function disableFingerprintButton() {
+    const fingerprintButton = document.getElementById("add-fingerprint");
+    fingerprintButton.disabled = true;
+    fingerprintButton.style.backgroundColor = "#aaa7ad";
+    fingerprintButton.style.cursor = "not-allowed";
+}
+
+window.onload = async function() {
+    try {
+        await fetch('/resetFingerprintStatus', { method: 'POST' });
+        log("Fingerprint status reset.");
+        
+        const response = await fetch('/getFingerprintStatus');
+        const data = await response.json();
+        
+        fingerprintAdded = data.fingerprintAdded;
+        if (fingerprintAdded) {
+            disableFingerprintButton();
+        } else {
+            resetFingerprintButton();
+        }
+    } catch (err) {
+        log("Error during initialization:", true);
+        console.error(err);
+    }
+};
+
+window.onbeforeunload = function() {
+    if (ws) {
+        ws.close();
+    }
+    resetRegistrationState();
+    return fetch('/resetFingerprintStatus', { method: 'POST' });
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    var form = document.getElementById('addUserForm');
+    form.addEventListener('submit', function(event) {
+        event.preventDefault();
+        
+        var formData = new FormData(form);
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/addUser', true);
+
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                var response = JSON.parse(xhr.responseText);
+                clearErrorMessages();
+
+                if (response.success) {
+                    alert('New User Added Successfully! PIN: ' + response.pin);
+                    form.reset();
+                    resetFingerprintButton();
+                } else {
+                    displayErrorMessages(response.errors);
+                }
+            } else {
+                alert('An error occurred while processing your request.');
+            }
+        };
+
+        xhr.send(formData);
+    });
+
+    function clearErrorMessages() {
+        var usernameError = document.getElementById('username-error');
+        usernameError.innerText = '';
+
+        var usernameField = document.getElementById('username');
+        usernameField.classList.remove('input-error');
+
+        var captchaSection = document.getElementById('captcha-section');
+        captchaSection.classList.remove('captcha-error');
+
+        var captchaLabel = document.querySelector('.captcha label');
+        captchaLabel.classList.remove('captcha-error-label');
+
+        var fingerprintError = document.getElementById('fingerprint-error');
+        fingerprintError.innerText = '';
+    
+        var fingerprintButton = document.getElementById('add-fingerprint');
+        fingerprintButton.classList.remove('fingerprint-error');
+    
+        var voiceCommandError = document.getElementById('voice-command-error');
+        voiceCommandError.innerText = '';
+    
+        var voiceCommandSelect = document.getElementById('voice-command');
+        voiceCommandSelect.classList.remove('voice-command-error');
+    }
+
+    function displayErrorMessages(errors) {
+        if (errors.username) {
+            var usernameError = document.getElementById('username-error');
+            usernameError.innerText = errors.username;
+            var usernameField = document.getElementById('username');
+            usernameField.classList.add('input-error');
         }
 
+        if (errors.captcha) {
+            var captchaSection = document.getElementById('captcha-section');
+            captchaSection.classList.add('captcha-error');
+        }
 
-              
-        document.addEventListener('DOMContentLoaded', function() {
-            var form = document.getElementById('addUserForm');
-            form.addEventListener('submit', function(event) {
-                event.preventDefault(); // Prevent default form submission
-
-                // Collect form data
-                var formData = new FormData(form);
-
-                // Send form data via AJAX
-                var xhr = new XMLHttpRequest();
-                xhr.open('POST', '/addUser', true);
-
-                xhr.onload = function() {
-                    if (xhr.status === 200) {
-                        var response = JSON.parse(xhr.responseText);
-
-                        // Clear previous error messages
-                        clearErrorMessages();
-
-                        if (response.success) {
-                            alert('New User Added Successfully! PIN: ' + response.pin);
-                            form.reset(); // Reset form fields
-                            resetFingerprintButton(); // Resetuje dugme za dodavanje otiska
-
-                        } else {
-                            displayErrorMessages(response.errors);
-                        }
-                    } else {
-                        alert('An error occurred while processing your request.');
-                    }
-                };
-
-                xhr.send(formData);
-            });
-
-            function clearErrorMessages() {
-                // Remove error messages and styles
-                var usernameError = document.getElementById('username-error');
-                usernameError.innerText = '';
-
-                var usernameField = document.getElementById('username');
-                usernameField.classList.remove('input-error');
-
-                var captchaSection = document.getElementById('captcha-section');
-                captchaSection.classList.remove('captcha-error');
-
-                var captchaLabel = document.querySelector('.captcha label');
-                captchaLabel.classList.remove('captcha-error-label');
-
-                var fingerprintError = document.getElementById('fingerprint-error');
-                fingerprintError.innerText = '';
-            
-                var fingerprintButton = document.getElementById('add-fingerprint');
-                fingerprintButton.classList.remove('fingerprint-error');
-            
-                var voiceCommandError = document.getElementById('voice-command-error');
-                voiceCommandError.innerText = '';
-            
-                var voiceCommandSelect = document.getElementById('voice-command');
-                voiceCommandSelect.classList.remove('voice-command-error');
-            }
-
-            function displayErrorMessages(errors) {
-                if (errors.username) {
-                    var usernameError = document.getElementById('username-error');
-                    usernameError.innerText = errors.username;
-
-                    var usernameField = document.getElementById('username');
-                    usernameField.classList.add('input-error');
-                }
-
-                if (errors.captcha) {
-                    var captchaSection = document.getElementById('captcha-section');
-                    captchaSection.classList.add('captcha-error');
-                }
-
-            if (errors.fingerprint) {
-                var fingerprintError = document.getElementById('fingerprint-error');
-                fingerprintError.innerText = "Fingerprint not added";
-        
-                var fingerprintButton = document.getElementById('add-fingerprint');
-                fingerprintButton.classList.add('fingerprint-error');
-            }
-        
-            if (errors.voiceCommand) {
-                var voiceCommandError = document.getElementById('voice-command-error');
-                voiceCommandError.innerText = errors.voiceCommand;  // Prikazuje poruku greške
-        
-                var voiceCommandSelect = document.getElementById('voice-command');
-                voiceCommandSelect.classList.add('voice-command-error');  // Dodaje klasu za grešku
-            }
-          }
-        });
+        if (errors.fingerprint) {
+            var fingerprintError = document.getElementById('fingerprint-error');
+            fingerprintError.innerText = "Fingerprint not added";
+            var fingerprintButton = document.getElementById('add-fingerprint');
+            fingerprintButton.classList.add('fingerprint-error');
+        }
+    
+        if (errors.voiceCommand) {
+            var voiceCommandError = document.getElementById('voice-command-error');
+            voiceCommandError.innerText = errors.voiceCommand;
+            var voiceCommandSelect = document.getElementById('voice-command');
+            voiceCommandSelect.classList.add('voice-command-error');
+        }
+    }
+});
     </script>
 </body>
 </html>
     )rawliteral";
 
-  server.send(200, "text/html", pageContent);
+    server.send(200, "text/html", pageContent);
 }
 
 
@@ -1641,7 +2109,6 @@ void handleAddUser() {
     refreshFingerprintIDs();
 
 }
-
 
 
 
@@ -1802,156 +2269,338 @@ void handleLogout() {
 
 
 void setup() {
-  Serial.begin(115200);
-  randomSeed(analogRead(0));
-  
-  mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
-  finger.begin(57600);
+    Serial.begin(115200);
+    randomSeed(analogRead(0));
+    
+    mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
+    finger.begin(57600);
 
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
 
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);  // Podesi vremensku zonu za Centralnoevropsko vreme (CET)
+    fingerprintMutex = xSemaphoreCreateMutex();
 
-  // Inicijalizacija SPIFFS
-  if (!SPIFFS.begin(true)) {
-    Serial.println("Greška pri montiranju SPIFFS");
-    return;
-  }
+    // Initialize SPIFFS
+    if (!SPIFFS.begin(true)) {
+        Serial.println("Greška pri montiranju SPIFFS");
+        return;
+    }
 
-  // Proveri da li postoji fajl sa korisnicima i inicijalizuj ako je potrebno
-  initializeUserFile();
+    initializeUserFile();
+    loadUsersFromFile();
 
-  // Učitavanje korisnika iz fajla pri pokretanju
-  loadUsersFromFile();
+    // Pin Setup
+    pinMode(ledPin, OUTPUT);
+    pinMode(blueLedPin, OUTPUT);
+    pinMode(pirPin, INPUT);
 
-  pinMode(ledPin, OUTPUT);      // LED dioda na pinu 5
-  pinMode(blueLedPin, OUTPUT);  // Plava LED dioda na GPIO 2
-  pinMode(pirPin, INPUT);       // PIR senzor
+    // OLED Setup
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        Serial.println(F("OLED nije pronađen"));
+        for (;;);
+    }
 
-  // Inicijalizacija OLED-a
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("OLED nije pronađen"));
-    for (;;);
-  }
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.print("Waiting for motion...");
+    display.display();
 
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.print("Waiting for motion...");
-  display.display();
+    // WiFi Setup
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi povezan. IP adresa: ");
+    Serial.println(WiFi.localIP());
 
-  // WiFi konekcija
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
+    // WebSocket Setup
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+    webSocket.enableHeartbeat(15000, 3000, 2);
 
-  Serial.println("WiFi povezan. IP adresa: ");
-  Serial.println(WiFi.localIP());
+    Serial.print("WebSocket server running on: ws://");
+Serial.print(WiFi.localIP());
+Serial.println(":81");
 
-  webSocket.begin();
-  webSocket.onEvent(webSocketEvent);
+    // Server Routes Setup
+    server.enableCORS(true);  // This is the correct way to enable CORS on ESP32
 
-  server.begin();
+    // Add headers to handle preflight requests
+    server.on("/", HTTP_OPTIONS, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+        server.sendHeader("Access-Control-Allow-Headers", "*");
+        server.send(204);
+    });
+    
+    // Main Routes
+    server.on("/", showMainPage);
+    server.on("/loginPage", showLoginPage);
+    server.on("/addUserPage", HTTP_GET, showAddUserPage);
+    server.on("/addUser", HTTP_POST, handleAddUser);
+    server.on("/resetFingerprintStatus", HTTP_POST, handleResetFingerprintStatus);
+    server.on("/login", HTTP_POST, handleLogin);
+    server.on("/delete", HTTP_GET, handleUserDeletion);
+    server.on("/logout", HTTP_GET, handleLogout);
+    
+    // Diagnostic Routes
+    server.on("/ws-info", HTTP_GET, []() {
+    String info = "WebSocket Server Info:\n";
+    info += "Server IP: " + WiFi.localIP().toString() + "\n";
+    info += "Server Port: 81\n";
+    info += "Connected Clients: " + String(connectedClients) + "\n";
+    info += "Client Status:\n";
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        info += "Client " + String(i) + ": " + (clientConnected[i] ? "Connected" : "Disconnected") + "\n";
+    }
+    info += "WiFi Status: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "\n";
+    info += "RSSI: " + String(WiFi.RSSI()) + " dBm\n";
+    server.send(200, "text/plain", info);
+});
 
-  // Servo setup
-  ESP32PWM::allocateTimer(0);
-  myservo.setPeriodHertz(50);
-  myservo.attach(servoPin, 1000, 2000);
+    server.on("/test-ws", HTTP_GET, []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        String html = R"html(
+            <html>
+            <head>
+                <title>WebSocket Test</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .status { margin: 10px 0; }
+                    .messages { border: 1px solid #ccc; padding: 10px; margin-top: 10px; }
+                </style>
+            </head>
+            <body>
+                <h2>WebSocket Test Page</h2>
+                <div class="status" id="status">Status: Disconnected</div>
+                <button onclick="sendTest()">Send Test Message</button>
+                <div class="messages" id="messages"></div>
+                <script>
+                    let ws;
+                    function connect() {
+                        ws = new WebSocket('ws://' + window.location.hostname + ':81');
+                        ws.onopen = () => {
+                            document.getElementById('status').innerHTML = 'Status: Connected';
+                            console.log('WebSocket Connected');
+                        };
+                        ws.onclose = () => {
+                            document.getElementById('status').innerHTML = 'Status: Disconnected';
+                            console.log('WebSocket Disconnected');
+                            setTimeout(connect, 2000);
+                        };
+                        ws.onmessage = (e) => {
+                            console.log('Message received:', e.data);
+                            document.getElementById('messages').innerHTML += '<br>Received: ' + e.data;
+                        };
+                        ws.onerror = (e) => {
+                            console.error('WebSocket error:', e);
+                            document.getElementById('messages').innerHTML += '<br>Error: ' + e;
+                        };
+                    }
+                    function sendTest() {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send('test');
+                            document.getElementById('messages').innerHTML += '<br>Sent: test';
+                        }
+                    }
+                    connect();
+                </script>
+            </body>
+            </html>
+        )html";
+        server.send(200, "text/html", html);
+    });
 
-  // Handleri za različite URL-ove
-  server.on("/", showMainPage);              // Main page
-  server.on("/loginPage", showLoginPage);    // Login page
-  // Ruta za Add User stranicu (GET zahtev)
-  server.on("/addUserPage", HTTP_GET, showAddUserPage);
+    server.begin();
 
-  // Ruta za obradu Add User forme (POST zahtev)
-  server.on("/addUser", HTTP_POST, handleAddUser);
-  server.on("/resetFingerprintStatus", HTTP_POST, handleResetFingerprintStatus);
-  server.on("/login", HTTP_POST, handleLogin);
-  server.on("/delete", HTTP_GET, handleUserDeletion);
-  server.on("/logout", HTTP_GET, handleLogout);
+    // Servo Setup
+    ESP32PWM::allocateTimer(0);
+    myservo.setPeriodHertz(50);
+    myservo.attach(servoPin, 1000, 2000);
 
+    // Fingerprint Sensor Setup
+    if (finger.verifyPassword()) {
+        Serial.println("Found fingerprint sensor!");
+    } else {
+        Serial.println("Did not find fingerprint sensor :(");
+        while (1) { delay(1); }
+    }
 
-  if (finger.verifyPassword()) {
-    Serial.println("Found fingerprint sensor!");
-  } else {
-    Serial.println("Did not find fingerprint sensor :(");
-    while (1) { delay(1); }
-  }
+    Serial.println(F("Reading sensor parameters"));
+    finger.getParameters();
+    Serial.print(F("Status: 0x")); Serial.println(finger.status_reg, HEX);
+    Serial.print(F("Sys ID: 0x")); Serial.println(finger.system_id, HEX);
+    Serial.print(F("Capacity: ")); Serial.println(finger.capacity);
+    Serial.print(F("Security level: ")); Serial.println(finger.security_level);
+    Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
+    Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
+    Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate);
+    
+    refreshFingerprintIDs();
+    
+    Serial.println("\n=== System Setup Complete ===");
+}
 
-  Serial.println(F("Reading sensor parameters"));
-  finger.getParameters();
-  Serial.print(F("Status: 0x")); Serial.println(finger.status_reg, HEX);
-  Serial.print(F("Sys ID: 0x")); Serial.println(finger.system_id, HEX);
-  Serial.print(F("Capacity: ")); Serial.println(finger.capacity);
-  Serial.print(F("Security level: ")); Serial.println(finger.security_level);
-  Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
-  Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
-  Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate); 
-      refreshFingerprintIDs();
+void checkDebugStatus() {
+    Serial.println("\n=== Debug Status Check ===");
+    Serial.printf("DEBUG_REGISTRATION: %s\n", DEBUG_REGISTRATION ? "true" : "false");
+    Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
+    Serial.printf("currentStep: %d\n", currentStep);
+    Serial.printf("Time since last debug: %lu ms\n", millis() - lastRegistrationDebug);
+}
 
-  
+void handleRegistrationDebug() {
+    static unsigned long lastRegistrationCheck = 0;
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - lastRegistrationCheck >= 1000) {  // Check every second
+        if (registrationActive) {
+            Serial.println("\n=== Active Registration Status ===");
+            logRegistrationStatus("Regular Check");
+        }
+        lastRegistrationCheck = currentMillis;
+    }
 }
 
 void loop() {
-  // Obrada klijent server zahteva
-  server.handleClient();
+    unsigned long currentMillis = millis();
+    
+    // Basic server and WebSocket handling
+    server.handleClient();
+    handleRegistrationDebug();
+    webSocket.loop();
 
-  // Detekcija pokreta i upravljanje LED diodom i OLED ekranom
-  handlePIRSensor();
+    // Enhanced debug section for registration process
+    if (DEBUG_REGISTRATION) {
+        if (registrationActive) {
+            if (currentMillis - lastRegistrationDebug >= REGISTRATION_DEBUG_INTERVAL) {
+                Serial.println("\n=== Registration Process Debug ===");
+                Serial.printf("Current Step: %d\n", currentStep);
+                Serial.printf("ID Assigned: %s\n", idAssigned ? "Yes" : "No");
+                Serial.printf("Fingerprint Added: %s\n", fingerprintAdded ? "Yes" : "No");
+                Serial.printf("Registration Active: %s\n", registrationActive ? "Yes" : "No");
+                Serial.printf("Time since last debug: %lu ms\n", currentMillis - lastRegistrationDebug);
+                lastRegistrationDebug = currentMillis;
+                Serial.printf("WebSocket Clients Connected: %d\n", webSocket.connectedClients());
+            }
+        } else if (currentMillis - lastRegistrationDebug >= 5000) {
+            Serial.println("Registration is not active. Current status:");
+            checkDebugStatus();
+            lastRegistrationDebug = currentMillis;
+        }
+    }
 
-  // Ažuriranje unosa PIN-a sa fizičkog tastature i prikaz na OLED-u i web stranici
-  handlePasswordInput();
+    // WebSocket status debug output
+    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
+        Serial.println("\n=== WebSocket Server Status ===");
+        Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
+        Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+        lastDebugPrint = currentMillis;
+    }
 
-  // Obrada WebSocket komunikacije
-  webSocket.loop();
+    // WebSocket ping
+    if (currentMillis - lastPing > 15000) {
+        webSocket.broadcastPing();
+        lastPing = currentMillis;
+    }
 
-    if (registrationActive) {  // Proces se pokreće samo kada je registracija aktivna
-        switch (currentStep) {
-            case 0:
-                Serial.println("Step 0: Assigning ID...");
-                assignFingerprintID();
-                sendProgressUpdate(0, "Assigning ID...");
-                currentStep = 1;
-                break;
+    // PIR Sensor and Password Input handling
+    handlePIRSensor();
+    handlePasswordInput();
 
-            case 1:
-                Serial.println("Step 1: Waiting for first scan...");
-                if (getFingerprintImage()) {
-                    sendProgressUpdate(1, "First scan complete. Remove finger.");
-                    currentStep = 2;
-                }
-                break;
-
-            case 2:
-                Serial.println("Step 2: Waiting for second scan...");
-                if (confirmSecondScan()) {
-                    sendProgressUpdate(2, "Second scan complete. Creating model...");
-                    currentStep = 3;
-                }
-                break;
-
-                case 3:
-                    Serial.println("Step 3: Saving fingerprint...");
-                    if (saveFingerprint()) {
-                        sendProgressUpdate(3, "Fingerprint successfully registered!");
-                        registrationActive = false;  // Deaktiviraj registraciju
-                        currentStep = 0;  // Resetuj korak
-                    } else {
-                        Serial.println("Failed to save fingerprint.");
-                        resetProgress();
+    // Fingerprint Registration Process
+    if (registrationActive) {
+        if (xSemaphoreTake(fingerprintMutex, portMAX_DELAY)) {
+            bool stepCompleted = false;
+            
+            switch (currentStep) {
+                case 0:
+                    if (!idAssigned) {
+                        Serial.println("Step 0: Assigning Fingerprint ID");
+                        assignFingerprintID();
+                        if (idAssigned) {
+                            Serial.printf("ID assigned successfully: %d\n", fingerprintID);
+                            sendProgressUpdate(0, "Place your finger on the sensor");
+                            currentStep = 1;
+                            stepCompleted = true;
+                        }
                     }
                     break;
 
-        }
-                delay(500);  // Mali delay kako bi omogućio da se podaci pošalju pre prekida
-  }
-  // Ako je korisnik ulogovan, pošalji sva trenutna stanja
-  if (loggedInClientNum != -1) {
-    sendAllStatusesToClient(loggedInClientNum);
-  }
+                case 1:
+                    Serial.println("Step 1: Waiting for first fingerprint scan");
+                    if (getFingerprintImage()) {
+                        Serial.println("First scan successful");
+                        sendProgressUpdate(1, "Remove finger and wait...");
+                        currentStep = 2;
+                        stepCompleted = true;
+                        delay(2000);  // Give time for finger removal
+                    }
+                    break;
 
+                case 2:
+                    Serial.println("Step 2: Waiting for second fingerprint scan");
+                    if (confirmSecondScan()) {
+                        Serial.println("Second scan successful");
+                        sendProgressUpdate(2, "Processing scans...");
+                        currentStep = 3;
+                        stepCompleted = true;
+                    }
+                    break;
+
+                case 3:
+                    Serial.println("Step 3: Saving fingerprint");
+                    if (saveFingerprint()) {
+                        Serial.println("Fingerprint saved successfully");
+                        sendProgressUpdate(3, "Registration complete!");
+                        fingerprintAdded = true;
+                        saveFingerprintAdded(true);
+                        registrationActive = false;
+                        stepCompleted = true;
+                    } else {
+                        Serial.println("Failed to save fingerprint");
+                        sendProgressUpdate(3, "Failed to save. Please try again.");
+                        resetRegistrationProcess();
+                    }
+                    break;
+
+                default:
+                    Serial.printf("Invalid step encountered: %d\n", currentStep);
+                    resetRegistrationProcess();
+                    break;
+            }
+
+            if (stepCompleted) {
+                Serial.printf("Completed step %d successfully\n", currentStep);
+            }
+
+            xSemaphoreGive(fingerprintMutex);
+            delay(100);  // Prevent tight loop
+        } else {
+            Serial.println("Failed to acquire fingerprint mutex");
+        }
+    }
+
+    // Handle pending registration start
+    if (startRegistrationPending && !registrationActive) {
+        Serial.println("Starting registration from pending state");
+        startFingerprintRegistration();
+    }
+
+    // Send status updates to logged-in client
+    if (loggedInClientNum != -1) {
+        sendAllStatusesToClient(loggedInClientNum);
+    }
+
+    // Print periodic status update
+    static unsigned long lastStatus = 0;
+    if (currentMillis - lastStatus > 5000) {
+        Serial.printf("Connected WebSocket clients: %d\n", webSocket.connectedClients());
+        lastStatus = currentMillis;
+    }
 }

@@ -27,26 +27,46 @@ void setup() {
   uint8_t wakeTime = asr.getWakeTime();
   Serial.print("wakeTime = ");
   Serial.println(wakeTime);
+
+  Serial.println("Sistem spreman za prepoznavanje govora.");
 }
 
 void loop() {
   uint8_t CMDID = asr.getCMDID();
+  
+  // Provera CMDID-a za wake word i komande
   switch (CMDID) {
-    case 103:                                                  // Ako je komanda "Upali svetlo"
-      digitalWrite(Led, HIGH);                                 // Upali LED diodu
-      Serial.println("Primljena komanda 'Upali svetlo', oznaka komande '103'"); 
+    case 1:  // Wake word
+      Serial.println("Prepoznata wake word komanda.");
       break;
 
-    case 104:                                                  // Ako je komanda "Ugasi svetlo"
-      digitalWrite(Led, LOW);                                  // Ugasi LED diodu
-      Serial.println("Primljena komanda 'Ugasi svetlo', oznaka komande '104'");  
+    case 5:  // Prva naučena komanda
+      Serial.println("Primljena komanda 'Komanda 1'.");
+      break;
+
+    case 6:  // Druga naučena komanda
+      Serial.println("Primljena komanda 'Komanda 2'.");
+      break;
+
+    case 7:  // Treća naučena komanda
+      Serial.println("Primljena komanda 'Komanda 3'.");
+      break;
+
+    case 103:  // Predefinisana komanda "Upali svetlo"
+      digitalWrite(Led, HIGH);
+      Serial.println("Primljena komanda 'Upali svetlo', oznaka komande '103'.");
+      break;
+
+    case 104:  // Predefinisana komanda "Ugasi svetlo"
+      digitalWrite(Led, LOW);
+      Serial.println("Primljena komanda 'Ugasi svetlo', oznaka komande '104'.");
       break;
 
     default:
       if (CMDID != 0) {
-        Serial.print("CMDID = ");  // Ispis ID komande
+        Serial.print("Nepoznata komanda sa CMDID = ");
         Serial.println(CMDID);
       }
   }
-  delay(300);
+  delay(300);  // Pauza između provera
 }

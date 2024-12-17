@@ -245,16 +245,17 @@ uint8_t getFingerprintEnroll(uint8_t id) {
 }
 
 void listOccupiedIDs() {
-  Serial.print("Occupied IDs: ");
+  Serial.println("ID Status (1 to capacity):");
   for (uint16_t id = 1; id < finger.capacity; id++) {
+    Serial.print("ID #");
+    Serial.print(id);
+    Serial.print(": ");
+    
     int p = finger.loadModel(id);
     if (p == FINGERPRINT_OK) {
-      Serial.print(id); Serial.print(" ");
-    } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
-      Serial.println("Communication error");
-      break;
+      Serial.println("Occupied");
+    } else {
+      Serial.println("Available");
     }
-    // Ako p nije FINGERPRINT_OK, ID je slobodan ili se dogodila greška
   }
-  Serial.println();
 }
