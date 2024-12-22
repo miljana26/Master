@@ -88,7 +88,11 @@ SemaphoreHandle_t fingerprintMutex;
 bool startRegistrationPending = false;
 unsigned long lastRegistrationDebug = 0;
 bool registrationDebugEnabled = true;
-
+//debug
+int lastDebuggedStep = -1;
+bool lastDebuggedIDAssigned = false;
+bool lastDebuggedFingerprintAdded = false;
+bool lastDebuggedRegistrationActive = false;
 
 HardwareSerial mySerial(2); // Koristi Serial2 za komunikaciju sa senzorom
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
@@ -164,13 +168,27 @@ void startFingerprintRegistration() {
 }
 
 void logRegistrationStatus(const char* location) {
-    Serial.printf("\n=== Registration Status at %s ===\n", location);
-    Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
-    Serial.printf("startRegistrationPending: %s\n", startRegistrationPending ? "true" : "false");
-    Serial.printf("currentStep: %d\n", currentStep);
-    Serial.printf("isAssigningId: %s\n", isAssigningId ? "true" : "false");
-    Serial.printf("idAssigned: %s\n", idAssigned ? "true" : "false");
+    bool stateChanged = false;
+    
+    if (lastDebuggedStep != currentStep ||
+        lastDebuggedIDAssigned != idAssigned ||
+        lastDebuggedFingerprintAdded != fingerprintAdded ||
+        lastDebuggedRegistrationActive != registrationActive) {
+        
+        Serial.printf("\n=== Registration Status at %s ===\n", location);
+        Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
+        Serial.printf("currentStep: %d\n", currentStep);
+        Serial.printf("isAssigningId: %s\n", isAssigningId ? "true" : "false");
+        Serial.printf("idAssigned: %s\n", idAssigned ? "true" : "false");
+        
+        // Update the last known states
+        lastDebuggedStep = currentStep;
+        lastDebuggedIDAssigned = idAssigned;
+        lastDebuggedFingerprintAdded = fingerprintAdded;
+        lastDebuggedRegistrationActive = registrationActive;
+    }
 }
+
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
@@ -621,28 +639,104 @@ bool checkIDAvailability(int id) {
     }
 }
 
-
+bool isIDInUse(int id) {
+    for (const User &user : users) {
+        if (user.fingerprintID.toInt() == id) {
+            return true;
+        }
+    }
+    return false;
+}
 
 void assignFingerprintID() {
     if (!isAssigningId || idAssigned) return;
     
     Serial.println("Starting ID assignment...");
-    refreshFingerprintIDs();  // Refresh IDs first
+    static unsigned long lastProgressUpdate = 0;
+    static int stepProgress = 0;
     
-    for (int id = 1; id <= finger.capacity; id++) {
-        if (checkIDAvailability(id)) {
-            fingerprintID = id;
+    // Update animation while assigning ID
+    if (millis() - lastProgressUpdate > 200) {
+        stepProgress = (stepProgress + 10) % 100;
+        int mappedProgress = stepProgress * 25 / 100;  // Map to 0-25% range
+        
+        DynamicJsonDocument doc(200);
+        doc["type"] = "progress";
+        doc["step"] = 0;
+        doc["animate"] = true;
+        doc["progressValue"] = mappedProgress;
+        doc["message"] = "Assigning fingerprint ID...";
+        String response;
+        serializeJson(doc, response);
+        webSocket.broadcastTXT(response);
+        lastProgressUpdate = millis();
+    }
+
+    // First check if we have a previous incomplete registration
+    if (fingerprintID > 0 && !isIDInUse(fingerprintID)) {
+        // Try to reuse the previous ID
+        uint8_t p = finger.loadModel(fingerprintID);
+        if (p == FINGERPRINT_OK) {
+            // Successfully found and can reuse the ID
             idAssigned = true;
             isAssigningId = false;
-            Serial.printf("Assigned Fingerprint ID: %d\n", fingerprintID);
+            
+            DynamicJsonDocument doc(200);
+            doc["type"] = "progress";
+            doc["step"] = 0;
+            doc["animate"] = false;
+            doc["progressValue"] = 25;  // Complete ID assignment phase
+            doc["message"] = "Previous ID reassigned successfully!";
+            String response;
+            serializeJson(doc, response);
+            webSocket.broadcastTXT(response);
+            
+            Serial.printf("Reusing previous Fingerprint ID: %d\n", fingerprintID);
             return;
         }
     }
     
-    Serial.println("No available IDs!");
+    // If no previous ID to reuse, find the first available slot
+    for (int id = 1; id <= finger.capacity; id++) {
+        if (!isIDInUse(id)) {  // First check if ID is not used by any registered user
+            uint8_t p = finger.loadModel(id);
+            if (p != FINGERPRINT_OK) {  // Then check if ID slot is empty in the sensor
+                fingerprintID = id;
+                idAssigned = true;
+                isAssigningId = false;
+                
+                DynamicJsonDocument doc(200);
+                doc["type"] = "progress";
+                doc["step"] = 0;
+                doc["animate"] = false;
+                doc["progressValue"] = 25;  // Complete ID assignment phase
+                doc["message"] = "New fingerprint ID assigned!";
+                String response;
+                serializeJson(doc, response);
+                webSocket.broadcastTXT(response);
+                
+                Serial.printf("Assigned new Fingerprint ID: %d\n", fingerprintID);
+                return;
+            }
+        }
+    }
+    
+    // If we get here, no IDs are available
+    Serial.println("No available fingerprint IDs!");
+    
+    DynamicJsonDocument doc(200);
+    doc["type"] = "progress";
+    doc["step"] = 0;
+    doc["animate"] = false;
+    doc["progressValue"] = 0;
+    doc["message"] = "Error: No available IDs!";
+    String response;
+    serializeJson(doc, response);
+    webSocket.broadcastTXT(response);
+    
+    // Reset the registration process
     resetRegistrationProcess();
 }
-
 
 void refreshFingerprintIDs() {
     Serial.println("Refreshing fingerprint IDs...");
@@ -659,86 +753,130 @@ void refreshFingerprintIDs() {
 }
 
 
-
 void sendProgressUpdate(int step, const String& message) {
-    if (!registrationActive) return;  // Don't send updates if not active
+    if (!registrationActive) return;
 
+    int progressValue = mapProgress(0, step); // Use mapProgress for consistent calculation
     DynamicJsonDocument doc(1024);
     doc["type"] = "progress";
     doc["step"] = step;
+    doc["progressValue"] = progressValue;
+    doc["animate"] = false;
     doc["message"] = message;
-    
+
     String json;
     serializeJson(doc, json);
-    
     Serial.print("Sending progress update: ");
     Serial.println(json);
-    
+
     if (webSocket.connectedClients() > 0) {
         webSocket.broadcastTXT(json);
-    } else {
-        Serial.println("No WebSocket clients connected!");
-        resetRegistrationProcess();
     }
 }
 
+
+int mapProgress(int stepProgress, int stepNumber) {
+    const int RANGES[4][2] = {
+        {0, 25},    // Step 0: ID Assignment (Ends at 25%)
+        {25, 50},   // Step 1: First Scan (Starts at 25%, Ends at 50%)
+        {50, 75},   // Step 2: Second Scan
+        {75, 100}   // Step 3: Completion
+    };
+    
+    int rangeStart = RANGES[stepNumber][0];
+    int rangeEnd = RANGES[stepNumber][1];
+    return rangeStart + (stepProgress * (rangeEnd - rangeStart) / 100);
+}
 
 
 // Prvo skeniranje otiska
 bool getFingerprintImage() {
-    int attempts = 0;  // Broji pokušaje
-    while (attempts < 3) {  // Maksimalno tri pokušaja
-        int p = finger.getImage();
-        
-        if (p == FINGERPRINT_OK) {
-            attempts++;  // Povećava broj pokušaja
-            delay(50);   // Kratko odlaganje pre ponovnog skeniranja
-        } else if (p == FINGERPRINT_NOFINGER) {
-            Serial.println("Waiting for finger...");
-            delay(1000); // Čeka 1 sekundu pre sledeće provere
-            return false;  // Ako prsta nema, izlazi iz funkcije
-        } else {
-            Serial.println("Error capturing fingerprint image");
-            resetProgress();  // Resetuje proces u slučaju greške
-            return false;
-        }
-    }
+    int p = finger.getImage();
+    static int scanAttempts = 0;
 
-    // Ako su sva tri pokušaja uspešna, prihvata otisak
-    if (attempts == 3) {
-        Serial.println("Image confirmed after 3 attempts");
-        finger.image2Tz(1);  // Konvertuje sliku i prelazi na sledeći korak
-        return true;
-    } else {
-        Serial.println("Failed to confirm fingerprint after 3 attempts");
-        resetProgress();  // Resetuje proces ako otisak nije potvrđen
-        return false;
+    switch (p) {
+        case FINGERPRINT_OK:
+            scanAttempts++;
+            if (scanAttempts >= 3) {
+                scanAttempts = 0;
+                if (finger.image2Tz(1) == FINGERPRINT_OK) {
+                    sendProgressUpdate(1, "First scan successful!");
+                    return true;
+                }
+            }
+            break;
+        case FINGERPRINT_NOFINGER:
+            scanAttempts = 0;
+            break;
+        default:
+            sendProgressUpdate(1, "Scan error, please try again");
+            delay(2000);
+            break;
     }
+    return false;
 }
-
-
 
 
 // Drugo skeniranje otiska
 bool confirmSecondScan() {
-    Serial.println("Remove your finger and place it again.");
-    delay(2000); // Pauza za uklanjanje prsta
+    static bool waitingForFingerRemoval = true;
+    static int stepProgress = 50; // Start of second scan progress range (50%)
+    static unsigned long lastProgressUpdate = 0;
 
-    int p = finger.getImage();
-    if (p == FINGERPRINT_OK) {
-        finger.image2Tz(2);
-        if (finger.createModel() == FINGERPRINT_OK) {
-            Serial.println("Fingerprint matched.");
-            return true; // Korak uspešan
-        } else {
-            Serial.println("Fingerprints did not match. Try again.");
-            resetProgress();
+    // Step 1: Ensure the finger is removed before starting the second scan
+    if (waitingForFingerRemoval) {
+        if (finger.getImage() == FINGERPRINT_NOFINGER) {
+            waitingForFingerRemoval = false;
+            stepProgress = 50; // Reset to start of second scan progress
+            sendProgressUpdate(2, "Now place your finger again for the second scan");
+            delay(1000); // Give user time to react
+            return false;
         }
-    } else if (p == FINGERPRINT_NOFINGER) {
-        delay(1000); // Čeka da korisnik postavi prst
+        return false; // Still waiting for finger removal
     }
-    return false;
+
+    // Step 2: Wait for the user to place their finger for the second scan
+    if (finger.getImage() == FINGERPRINT_OK) {
+        // Finger detected, process the image
+        if (finger.image2Tz(2) == FINGERPRINT_OK) {
+            if (finger.createModel() == FINGERPRINT_OK) {
+                // Scans match, second scan successful
+                sendProgressUpdate(2, "Second scan successful! Matching scans...");
+                return true; // Proceed to the next step
+            } else {
+                // Scans don't match, restart process
+                waitingForFingerRemoval = true; // Reset for next attempt
+                sendProgressUpdate(1, "Scans don't match. Restarting first scan...");
+                currentStep = 1; // Return to step 1
+                delay(2000);
+            }
+        } else {
+            sendProgressUpdate(2, "Error during second scan. Please try again.");
+            delay(2000);
+        }
+        return false;
+    }
+
+    // Step 3: Update progress animation while waiting for the finger
+    if (millis() - lastProgressUpdate > 200) {
+        stepProgress = stepProgress < 75 ? stepProgress + 1 : 75; // Increment progress to max 75%
+        DynamicJsonDocument doc(200);
+        doc["type"] = "progress";
+        doc["step"] = 2;
+        doc["animate"] = true;
+        doc["progressValue"] = stepProgress;
+        doc["message"] = "Place your finger for the second scan...";
+        String response;
+        serializeJson(doc, response);
+        webSocket.broadcastTXT(response);
+        lastProgressUpdate = millis();
+    }
+
+    return false; // Waiting for valid second scan
 }
+
+
+
 
 bool getFingerprintAdded() {
     if (!SPIFFS.exists("/fingerprintAdded.txt")) {
@@ -776,6 +914,18 @@ bool saveFingerprint() {
         Serial.println("Fingerprint stored successfully.");
         fingerprintAdded = true;
         saveFingerprintAdded(true);
+        
+        // Send final completion message
+        DynamicJsonDocument doc(200);
+        doc["type"] = "progress";
+        doc["step"] = 3;
+        doc["animate"] = false;
+        doc["progressValue"] = 100; // Full completion
+        doc["message"] = "Registration complete!";
+        String response;
+        serializeJson(doc, response);
+        webSocket.broadcastTXT(response);
+        
         Serial.println("Saved fingerprintAdded as true in SPIFFS");
         refreshFingerprintIDs();
         return true;
@@ -786,22 +936,26 @@ bool saveFingerprint() {
 }
 
 void resetRegistrationProcess() {
+    static bool resetInProgress = false;
+    if (resetInProgress) return; // Prevent duplicate resets
+    resetInProgress = true;
+
     Serial.println("Resetting registration process");
     registrationActive = false;
-    startRegistrationPending = false;
     currentStep = 0;
-    isAssigningId = false;
     idAssigned = false;
-    
-    // Only reset fingerprintAdded if registration wasn't successful
+    isAssigningId = false;
+
     if (!fingerprintAdded) {
         saveFingerprintAdded(false);
     }
-    
+
     if (webSocket.connectedClients() > 0) {
         String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
         webSocket.broadcastTXT(resetMsg);
     }
+
+    resetInProgress = false;
 }
 
 
@@ -1551,9 +1705,31 @@ function initializeWebSocket(wsUrl, status) {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'progress') {
-                    updateProgress(data.step, data.message);
-                } else if (data.type === 'error') {
-                    handleConnectionError(data.message);
+                    const progressBar = document.querySelector('[role="progressbar"]');
+                    const status = document.getElementById('fingerprint-status');
+                    
+                    if (progressBar && status) {
+                        // Update status message
+                        status.innerText = data.message;
+                        
+                        // Handle animation if specified
+                        if (data.animate) {
+                            progressBar.style.setProperty('--value', data.progressValue.toString());
+                            progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
+                        } else {
+                            // Set fixed progress value
+                            progressBar.style.setProperty('--value', data.progressValue.toString());
+                            progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
+                        }
+                        
+                        // Change status color based on error messages
+                        if (data.message.includes('error') || data.message.includes('don\'t match')) {
+                            status.style.color = 'red';
+                            setTimeout(() => {
+                                status.style.color = '#00d4ff';
+                            }, 2000);
+                        }
+                    }
                 }
             } catch (error) {
                 console.error('Error parsing message:', error);
@@ -1639,15 +1815,25 @@ function setupWebSocketHandlers() {
 
 function handleFingerprintMessage(data) {
     const { status, message } = data;
-    document.getElementById('fingerprint-status').innerText = message;
+    const fingerprintStatus = document.getElementById('fingerprint-status');
+    const fingerprintError = document.getElementById('fingerprint-error');
     
-    if (status === 'waiting') {
-        document.getElementById('fingerprint-status').style.color = '#00d4ff';
-    } else if (status === 'error') {
-        document.getElementById('fingerprint-status').style.color = 'red';
-        setTimeout(() => {
-            document.getElementById('fingerprint-status').style.color = '#00d4ff';
-        }, 2000);
+    if (fingerprintStatus) {
+        fingerprintStatus.innerText = message;
+        
+        if (status === 'waiting') {
+            fingerprintStatus.style.color = '#00d4ff';
+        } else if (status === 'error') {
+            fingerprintStatus.style.color = 'red';
+            setTimeout(() => {
+                fingerprintStatus.style.color = '#00d4ff';
+            }, 2000);
+        }
+    }
+
+    // Clear error message when fingerprint is successfully added
+    if (status === 'success' && fingerprintError) {
+        fingerprintError.innerText = '';
     }
 }
 
@@ -1659,6 +1845,19 @@ function handleCancelConfirmation() {
     }
 }
 
+function disableFingerprintButton() {
+    const fingerprintButton = document.getElementById("add-fingerprint");
+    fingerprintButton.disabled = true;
+    fingerprintButton.style.backgroundColor = "#aaa7ad";
+    fingerprintButton.style.cursor = "not-allowed";
+}
+
+function resetFingerprintButton() {
+    const fingerprintButton = document.getElementById("add-fingerprint");
+    fingerprintButton.disabled = false;
+    fingerprintButton.style.backgroundColor = "#00d4ff";
+    fingerprintButton.style.cursor = "pointer";
+}
 
 function showFingerprintModal() {
     console.log('Showing fingerprint modal...');
@@ -1817,6 +2016,7 @@ function updateProgress(step, message) {
     console.log(`Updating progress - Step: ${step}, Message: ${message}`);
     const progressBar = document.querySelector('[role="progressbar"]');
     const status = document.getElementById('fingerprint-status');
+    const fingerprintError = document.getElementById('fingerprint-error');
     
     if (!progressBar || !status) {
         console.error('Progress elements not found');
@@ -1832,6 +2032,11 @@ function updateProgress(step, message) {
             targetValue = 100;
             registrationInProgress = false;
             fingerprintAdded = true;
+            disableFingerprintButton();
+            // Clear error message on successful completion
+            if (fingerprintError) {
+                fingerprintError.innerText = '';
+            }
             break;
         default: targetValue = 0;
     }
@@ -1843,24 +2048,11 @@ function updateProgress(step, message) {
     console.log(`Progress updated - Value: ${targetValue}, Message: ${message}`);
 }
 
-function resetFingerprintButton() {
-    const fingerprintButton = document.getElementById("add-fingerprint");
-    fingerprintButton.disabled = false;
-    fingerprintButton.style.backgroundColor = "#00d4ff";
-    fingerprintButton.style.cursor = "pointer";
-}
-
-function disableFingerprintButton() {
-    const fingerprintButton = document.getElementById("add-fingerprint");
-    fingerprintButton.disabled = true;
-    fingerprintButton.style.backgroundColor = "#aaa7ad";
-    fingerprintButton.style.cursor = "not-allowed";
-}
 
 window.onload = async function() {
     try {
         await fetch('/resetFingerprintStatus', { method: 'POST' });
-        log("Fingerprint status reset.");
+        console.log("Fingerprint status reset.");
         
         const response = await fetch('/getFingerprintStatus');
         const data = await response.json();
@@ -1868,12 +2060,16 @@ window.onload = async function() {
         fingerprintAdded = data.fingerprintAdded;
         if (fingerprintAdded) {
             disableFingerprintButton();
+            // Clear error message if fingerprint is already added
+            const fingerprintError = document.getElementById('fingerprint-error');
+            if (fingerprintError) {
+                fingerprintError.innerText = '';
+            }
         } else {
             resetFingerprintButton();
         }
     } catch (err) {
-        log("Error during initialization:", true);
-        console.error(err);
+        console.error("Error during initialization:", err);
     }
 };
 
@@ -1898,11 +2094,11 @@ document.addEventListener('DOMContentLoaded', function() {
             if (xhr.status === 200) {
                 var response = JSON.parse(xhr.responseText);
                 clearErrorMessages();
-
+        
                 if (response.success) {
                     alert('New User Added Successfully! PIN: ' + response.pin);
                     form.reset();
-                    resetFingerprintButton();
+                    resetFingerprintButton();  // Reset the button here
                 } else {
                     displayErrorMessages(response.errors);
                 }
@@ -2026,53 +2222,65 @@ void handleAddUser() {
     JsonObject errors = jsonResponse.createNestedObject("errors");
     bool success = true;
 
+    // Get form data
     String enteredUsername = server.arg("username");
     String selectedVoiceCommand = server.arg("voiceCommand");
-    String fingerprintAdded = getFingerprintAdded() ? "true" : "false";
+    bool isFingerprintAdded = getFingerprintAdded();
 
-    Serial.print("Retrieved fingerprintAdded from SPIFFS in handleAddUser(): ");
-    Serial.println(fingerprintAdded);
+    Serial.printf("Received data - Username: %s, Voice Command: %s, Fingerprint Added: %s\n",
+                 enteredUsername.c_str(), 
+                 selectedVoiceCommand.c_str(), 
+                 isFingerprintAdded ? "true" : "false");
 
-    // Validacija CAPTCHA
+    // Validate CAPTCHA
     if (!server.hasArg("captcha")) {
+        Serial.println("CAPTCHA validation failed");
         errors["captcha"] = true;
         success = false;
     }
 
-    // Validacija korisničkog imena
-    if (enteredUsername == "") {
+    // Username validation
+    if (enteredUsername.isEmpty()) {
+        Serial.println("Username is empty");
         errors["username"] = "Please enter a username.";
         success = false;
     } else if (!isValidUsername(enteredUsername)) {
-        errors["username"] = "Invalid username! Please follow the rules.";
+        Serial.println("Username is invalid");
+        errors["username"] = "Invalid username! Must start with a letter and contain only letters and numbers.";
         success = false;
     } else {
+        // Check if username already exists
         bool userExists = false;
-        for (User &u : users) {
+        for (const User &u : users) {
             if (u.username == enteredUsername) {
                 userExists = true;
                 break;
             }
         }
         if (userExists) {
+            Serial.println("Username already exists");
             errors["username"] = "Error: User already exists!";
             success = false;
         }
     }
 
-    // Validacija otiska prsta
-    if (fingerprintAdded != "true") {
+    // Fingerprint validation
+    if (!isFingerprintAdded) {
+        Serial.println("Fingerprint not added");
         errors["fingerprint"] = "Fingerprint not added.";
         success = false;
     }
 
-    // Validacija izbora voice command-a
-    if (selectedVoiceCommand == "") {
+    // Voice command validation
+    if (selectedVoiceCommand.isEmpty()) {
+        Serial.println("Voice command not selected");
         errors["voiceCommand"] = "Voice command not selected.";
         success = false;
     }
 
+    // If any validation failed, return error response
     if (!success) {
+        Serial.println("Validation failed, sending error response");
         jsonResponse["success"] = false;
         String response;
         serializeJson(jsonResponse, response);
@@ -2080,34 +2288,50 @@ void handleAddUser() {
         return;
     }
 
-    // Korišćenje već dodeljenog ID-a 
+    // All validations passed, proceed with user creation
     Serial.printf("Current Fingerprint ID before saving: %d\n", fingerprintID);
 
-    String fingerprintID_handleAddUser = String(fingerprintID); // Dodeljen u `assignFingerprintID`
+    // Generate new PIN for user
     String newPin = generateUniquePin();
+    Serial.printf("Generated PIN: %s\n", newPin.c_str());
 
-    // Kreiraj novog korisnika i dodaj u listu
-    User newUser = {enteredUsername, newPin, fingerprintID_handleAddUser, selectedVoiceCommand};
+    // Create new user
+    String fingerprintID_str = String(fingerprintID);
+    User newUser = {
+        enteredUsername,
+        newPin,
+        fingerprintID_str,
+        selectedVoiceCommand
+    };
+
+    // Add user to vector and save to file
     users.push_back(newUser);
-    saveUserToFile(enteredUsername, newPin, fingerprintID_handleAddUser, selectedVoiceCommand);
+    saveUserToFile(enteredUsername, newPin, fingerprintID_str, selectedVoiceCommand);
 
     Serial.printf("Added user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
-                  enteredUsername.c_str(), newPin.c_str(), fingerprintID_handleAddUser.c_str(), selectedVoiceCommand.c_str());
+                 enteredUsername.c_str(), 
+                 newPin.c_str(), 
+                 fingerprintID_str.c_str(), 
+                 selectedVoiceCommand.c_str());
 
-    // Resetuj fingerprint status
-    fingerprintAdded = "false";
+    // Reset fingerprint status
+    fingerprintAdded = false;
     saveFingerprintAdded(false);
 
-    // Odgovor za klijenta
+    // Prepare success response
     jsonResponse["success"] = true;
     jsonResponse["pin"] = newPin;
     String response;
     serializeJson(jsonResponse, response);
+    
+    // Send response
     server.send(200, "application/json", response);
 
-     Serial.println("Refreshing fingerprint IDs after adding user...");
+    // Refresh fingerprint IDs after adding user
+    Serial.println("Refreshing fingerprint IDs after adding user...");
     refreshFingerprintIDs();
 
+    Serial.println("Successfully completed handleAddUser");
 }
 
 
@@ -2453,20 +2677,15 @@ void checkDebugStatus() {
 }
 
 void handleRegistrationDebug() {
-    static unsigned long lastRegistrationCheck = 0;
-    unsigned long currentMillis = millis();
-
-    if (currentMillis - lastRegistrationCheck >= 1000) {  // Check every second
-        if (registrationActive) {
-            Serial.println("\n=== Active Registration Status ===");
-            logRegistrationStatus("Regular Check");
-        }
-        lastRegistrationCheck = currentMillis;
+    if (registrationActive) {
+        logRegistrationStatus("State Change Check");
     }
 }
 
 void loop() {
-    unsigned long currentMillis = millis();
+     unsigned long currentMillis = millis();
+    static bool firstScanMessage = true;
+    static bool secondScanMessage = true;
     
     // Basic server and WebSocket handling
     server.handleClient();
@@ -2519,7 +2738,7 @@ void loop() {
             bool stepCompleted = false;
             
             switch (currentStep) {
-                case 0:
+                case 0:// ID Assignment
                     if (!idAssigned) {
                         Serial.println("Step 0: Assigning Fingerprint ID");
                         assignFingerprintID();
@@ -2532,20 +2751,30 @@ void loop() {
                     }
                     break;
 
-                case 1:
-                    Serial.println("Step 1: Waiting for first fingerprint scan");
+                case 1:// First Scan
+                    if (firstScanMessage) {
+                        Serial.println("Step 1: Waiting for first fingerprint scan");
+                        firstScanMessage = false;
+                    }
+                    
                     if (getFingerprintImage()) {
+                        firstScanMessage = true;  // Reset for next time
                         Serial.println("First scan successful");
                         sendProgressUpdate(1, "Remove finger and wait...");
                         currentStep = 2;
                         stepCompleted = true;
-                        delay(2000);  // Give time for finger removal
+                        delay(1000);
                     }
                     break;
 
-                case 2:
-                    Serial.println("Step 2: Waiting for second fingerprint scan");
+                case 2:// Second Scan
+                    if (secondScanMessage) {
+                        Serial.println("Step 2: Waiting for second fingerprint scan");
+                        secondScanMessage = false;
+                    }
+                    
                     if (confirmSecondScan()) {
+                        secondScanMessage = true;  // Reset for next time
                         Serial.println("Second scan successful");
                         sendProgressUpdate(2, "Processing scans...");
                         currentStep = 3;
@@ -2553,7 +2782,7 @@ void loop() {
                     }
                     break;
 
-                case 3:
+                case 3:// Save Fingerprint
                     Serial.println("Step 3: Saving fingerprint");
                     if (saveFingerprint()) {
                         Serial.println("Fingerprint saved successfully");
