@@ -11,6 +11,7 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <Adafruit_Fingerprint.h>
+#include "DFRobot_DF2301Q.h"
 
 
 
@@ -31,6 +32,7 @@ volatile int connectedClients = 0;
 bool clientConnected[MAX_CLIENTS] = {false};
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+DFRobot_DF2301Q_I2C asr;
 
 const char *ssid = "MS";
 const char *password = "zastomezezas";
@@ -92,6 +94,8 @@ SemaphoreHandle_t fingerprintMutex;
 bool startRegistrationPending = false;
 unsigned long lastRegistrationDebug = 0;
 bool registrationDebugEnabled = true;
+bool firstStepVerified = false;
+String expectedVoiceCommand = "";
 //debug
 int lastDebuggedStep = -1;
 bool lastDebuggedIDAssigned = false;
@@ -121,6 +125,8 @@ String enteredPassword = "";
 String correctPassword = "133A";
 int attempts = 0;
 const int maxAttempts = 3;
+int voiceAttempts = 0;
+const int maxVoiceAttempts = 3;
 
 // Servo setup
 Servo myservo;
@@ -129,6 +135,68 @@ int pos = 0;
 
 unsigned long pirActivationTime = 0;
 const unsigned long pirTimeout = 180000;  // 3 minuta timeout
+
+void broadcastState(const char* type, bool state = false, const char* additional = nullptr) {
+    DynamicJsonDocument doc(256);
+    doc["type"] = type;
+    doc["state"] = state;
+    if (additional != nullptr) {
+        doc["time"] = additional;
+    }
+    
+    String message;
+    serializeJson(doc, message);
+    webSocket.broadcastTXT(message);
+    
+    Serial.printf("Broadcasting %s state: %s\n", type, state ? "true" : "false");
+}
+
+
+
+// Helper function to send all current states to a specific client
+void sendAllStatusesToClient(uint8_t clientNum) {
+    DynamicJsonDocument stateDoc(256);
+    String stateMsg;
+
+    // Send LED state
+    stateDoc["type"] = "led";
+    stateDoc["state"] = ledState;
+    serializeJson(stateDoc, stateMsg);
+    webSocket.sendTXT(clientNum, stateMsg);
+
+    // Send motion state
+    stateDoc.clear();
+    stateDoc["type"] = "motion";
+    stateDoc["state"] = motionState;
+    stateDoc["time"] = motionDetectedTime;
+    stateMsg = "";
+    serializeJson(stateDoc, stateMsg);
+    webSocket.sendTXT(clientNum, stateMsg);
+
+    // Send PIN state
+    stateDoc.clear();
+    stateDoc["type"] = "pin";
+    stateDoc["value"] = enteredPassword;
+    stateMsg = "";
+    serializeJson(stateDoc, stateMsg);
+    webSocket.sendTXT(clientNum, stateMsg);
+
+    // Send alarm state
+    stateDoc.clear();
+    stateDoc["type"] = "alarm";
+    stateDoc["state"] = alarmState;
+    stateMsg = "";
+    serializeJson(stateDoc, stateMsg);
+    webSocket.sendTXT(clientNum, stateMsg);
+
+    // Send door state
+    stateDoc.clear();
+    stateDoc["type"] = "doors";
+    stateDoc["state"] = doorState;
+    stateMsg = "";
+    serializeJson(stateDoc, stateMsg);
+    webSocket.sendTXT(clientNum, stateMsg);
+}
 
 
 void sendTelegramMessage(const String& message) {
@@ -220,94 +288,196 @@ void logRegistrationStatus(const char* location) {
 }
 
 
+void updateMotionState(bool detected, const char* time = nullptr) {
+    motionState = detected;
+    digitalWrite(ledPin, detected ? HIGH : LOW);
+    ledState = detected;
+    
+    // Broadcast both motion and LED states
+    broadcastState("motion", detected, time);
+    broadcastState("led", ledState);
+}
+
+void updateLEDState(bool state) {
+    ledState = state;
+    digitalWrite(ledPin, state ? HIGH : LOW);
+    broadcastState("led", state);
+}
+
+void updateAlarmState(bool state) {
+    alarmState = state;
+    digitalWrite(blueLedPin, state ? HIGH : LOW);
+    broadcastState("alarm", state);
+}
+
+void updateDoorState(bool state) {
+    doorState = state;
+    broadcastState("doors", state);
+}
+
+void updatePINState(const String& pin) {
+    DynamicJsonDocument doc(256);
+    doc["type"] = "pin";
+    doc["value"] = pin;
+    
+    String message;
+    serializeJson(doc, message);
+    webSocket.broadcastTXT(message);
+}
+
+// WebSocket event handler
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
+        case WStype_DISCONNECTED:
+            Serial.printf("[WebSocket] Client #%u disconnected\n", num);
+            if (num < MAX_CLIENTS) {
+                clientConnected[num] = false;
+                if (connectedClients > 0) {
+                    connectedClients--;
+                }
+            }
+            break;
+            
         case WStype_CONNECTED:
             {
                 IPAddress ip = webSocket.remoteIP(num);
                 Serial.printf("[WebSocket] Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
-                clientConnected[num] = true;
-                connectedClients++;
+                
+                // Update client tracking
+                if (num < MAX_CLIENTS && !clientConnected[num]) {
+                    clientConnected[num] = true;
+                    connectedClients++;
+                }
 
-                logRegistrationStatus("WebSocket Connected");
+                // Send current states
+                DynamicJsonDocument stateDoc(256);
+                String stateMsg;
 
-                // Send initial status
-                DynamicJsonDocument doc(200);
-                doc["type"] = "status";
-                doc["message"] = "Connected successfully";
-                String response;
-                serializeJson(doc, response);
-                webSocket.sendTXT(num, response);
+                // Motion state
+                stateDoc["type"] = "motion";
+                stateDoc["state"] = motionState;
+                stateDoc["time"] = motionDetectedTime;
+                serializeJson(stateDoc, stateMsg);
+                webSocket.sendTXT(num, stateMsg);
+
+                // LED state
+                stateDoc.clear();
+                stateMsg = "";
+                stateDoc["type"] = "led";
+                stateDoc["state"] = ledState;
+                serializeJson(stateDoc, stateMsg);
+                webSocket.sendTXT(num, stateMsg);
+
+                // Alarm state
+                stateDoc.clear();
+                stateMsg = "";
+                stateDoc["type"] = "alarm";
+                stateDoc["state"] = alarmState;
+                serializeJson(stateDoc, stateMsg);
+                webSocket.sendTXT(num, stateMsg);
+
+                // Door state
+                stateDoc.clear();
+                stateMsg = "";
+                stateDoc["type"] = "doors";
+                stateDoc["state"] = doorState;
+                serializeJson(stateDoc, stateMsg);
+                webSocket.sendTXT(num, stateMsg);
+
+                // PIN state
+                stateDoc.clear();
+                stateMsg = "";
+                stateDoc["type"] = "pin";
+                stateDoc["value"] = enteredPassword;
+                serializeJson(stateDoc, stateMsg);
+                webSocket.sendTXT(num, stateMsg);
             }
             break;
-
+            
         case WStype_TEXT:
             {
                 String text = String((char*)payload);
                 Serial.printf("[WebSocket] Received text from #%u: %s\n", num, text.c_str());
 
-                if (text == "start") {
-                    Serial.println("[WebSocket] Received start command");
-                    logRegistrationStatus("Before Start Command");
+                if (text == "refresh" || text == "getStates") {
+                    // Send current states
+                    DynamicJsonDocument stateDoc(256);
+                    String stateMsg;
 
+                    // Motion state
+                    stateDoc["type"] = "motion";
+                    stateDoc["state"] = motionState;
+                    stateDoc["time"] = motionDetectedTime;
+                    serializeJson(stateDoc, stateMsg);
+                    webSocket.sendTXT(num, stateMsg);
+
+                    // LED state
+                    stateDoc.clear();
+                    stateMsg = "";
+                    stateDoc["type"] = "led";
+                    stateDoc["state"] = ledState;
+                    serializeJson(stateDoc, stateMsg);
+                    webSocket.sendTXT(num, stateMsg);
+
+                    // Alarm state
+                    stateDoc.clear();
+                    stateMsg = "";
+                    stateDoc["type"] = "alarm";
+                    stateDoc["state"] = alarmState;
+                    serializeJson(stateDoc, stateMsg);
+                    webSocket.sendTXT(num, stateMsg);
+
+                    // Door state
+                    stateDoc.clear();
+                    stateMsg = "";
+                    stateDoc["type"] = "doors";
+                    stateDoc["state"] = doorState;
+                    serializeJson(stateDoc, stateMsg);
+                    webSocket.sendTXT(num, stateMsg);
+
+                    // PIN state
+                    stateDoc.clear();
+                    stateMsg = "";
+                    stateDoc["type"] = "pin";
+                    stateDoc["value"] = enteredPassword;
+                    serializeJson(stateDoc, stateMsg);
+                    webSocket.sendTXT(num, stateMsg);
+                } 
+                else if (text == "start") {
                     if (!registrationActive) {
-                        Serial.println("[WebSocket] Starting new registration");
-                        registrationActive = true;
-                        currentStep = 0;
-                        isAssigningId = true;
-                        idAssigned = false;
-                        fingerprintAdded = false;
-                        saveFingerprintAdded(false);
-
-                        logRegistrationStatus("After Registration Start");
-
-                        // Send immediate confirmation
-                        DynamicJsonDocument progressDoc(200);
-                        progressDoc["type"] = "progress";
-                        progressDoc["step"] = 0;
-                        progressDoc["message"] = "Place your finger on the sensor";
-                        String progressResponse;
-                        serializeJson(progressDoc, progressResponse);
-                        webSocket.sendTXT(num, progressResponse);
-                    } else {
-                        Serial.println("[WebSocket] Registration already active, ignoring start command");
+                        startFingerprintRegistration();
+                    }
+                } 
+                else if (text == "cancel") {
+                    if (registrationActive) {
+                        resetRegistrationProcess();
+                        DynamicJsonDocument doc(128);
+                        doc["type"] = "cancel";
+                        doc["message"] = "Registration cancelled";
+                        String response;
+                        serializeJson(doc, response);
+                        webSocket.sendTXT(num, response);
                     }
                 }
-                else if (text == "cancel") {
-                  Serial.println("[WebSocket] Received cancel command");
-                  
-                  // Only reset the registration process if it wasn't completed
-                  if (!currentRegistration.registrationComplete) {
-                      resetRegistrationProcess();
-                      
-                      DynamicJsonDocument doc(200);
-                      doc["type"] = "progress";
-                      doc["step"] = 0;
-                      doc["message"] = "Registration cancelled";
-                      String response;
-                      serializeJson(doc, response);
-                      webSocket.sendTXT(num, response);
-                  } else {
-                      // If registration was complete, just close the WebSocket gracefully
-                      DynamicJsonDocument doc(200);
-                      doc["type"] = "progress";
-                      doc["step"] = 3;
-                      doc["message"] = "Registration complete";
-                      String response;
-                      serializeJson(doc, response);
-                      webSocket.sendTXT(num, response);
-                  }
-              }
             }
             break;
 
-        case WStype_DISCONNECTED:
-            Serial.printf("[WebSocket] Client #%u disconnected\n", num);
-            if (clientConnected[num]) {
+        case WStype_ERROR:
+            Serial.printf("[WebSocket] Error from client #%u\n", num);
+            if (num < MAX_CLIENTS) {
                 clientConnected[num] = false;
-                connectedClients--;
+                if (connectedClients > 0) {
+                    connectedClients--;
+                }
             }
-            logRegistrationStatus("WebSocket Disconnected");
+            break;
+
+        case WStype_PING:
+            Serial.printf("[WebSocket] Ping from client #%u\n", num);
+            break;
+
+        case WStype_PONG:
+            Serial.printf("[WebSocket] Pong from client #%u\n", num);
             break;
     }
 }
@@ -400,21 +570,19 @@ int hexToInt(char c) {
 
 
 
-void sendAllStatusesToClient(uint8_t clientNum) {
-  String ledStatusMsg = "{\"type\":\"led\",\"state\":" + String(ledState ? "true" : "false") + "}";
-  String motionStatusMsg = "{\"type\":\"motion\",\"state\":" + String(motionState ? "true" : "false") + ", \"time\":\"" + motionDetectedTime + "\"}";
-  String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":" + String(alarmState ? "true" : "false") + "}";
-  String doorStatusMsg = "{\"type\":\"doors\",\"state\":" + String(doorState ? "true" : "false") + "}";
-  String pinStatusMsg = "{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}";
-
-  webSocket.sendTXT(clientNum, ledStatusMsg);
-  webSocket.sendTXT(clientNum, motionStatusMsg);
-  webSocket.sendTXT(clientNum, alarmStatusMsg);
-  webSocket.sendTXT(clientNum, doorStatusMsg);
-  webSocket.sendTXT(clientNum, pinStatusMsg);
-}
-
-
+//void sendAllStatusesToClient(uint8_t clientNum) {
+//  String ledStatusMsg = "{\"type\":\"led\",\"state\":" + String(ledState ? "true" : "false") + "}";
+//  String motionStatusMsg = "{\"type\":\"motion\",\"state\":" + String(motionState ? "true" : "false") + ", \"time\":\"" + motionDetectedTime + "\"}";
+//  String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":" + String(alarmState ? "true" : "false") + "}";
+//  String doorStatusMsg = "{\"type\":\"doors\",\"state\":" + String(doorState ? "true" : "false") + "}";
+//  String pinStatusMsg = "{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}";
+//
+//  webSocket.sendTXT(clientNum, ledStatusMsg);
+//  webSocket.sendTXT(clientNum, motionStatusMsg);
+//  webSocket.sendTXT(clientNum, alarmStatusMsg);
+//  webSocket.sendTXT(clientNum, doorStatusMsg);
+//  webSocket.sendTXT(clientNum, pinStatusMsg);
+//}
 
 String getFormattedTime() {
   struct tm timeinfo;
@@ -426,235 +594,344 @@ String getFormattedTime() {
   return String(timeStr);
 }
 
+int getFingerprintID() {
+  User* currentUser = nullptr;
+  int fingerprintID = finger.getImage();
+  if (fingerprintID == FINGERPRINT_OK) {
+    fingerprintID = finger.image2Tz();
+    if (fingerprintID == FINGERPRINT_OK) {
+      fingerprintID = finger.fingerFastSearch();
+      if (fingerprintID == FINGERPRINT_OK) {
+        // Search for user with matching fingerprint
+        for (User &user : users) {
+          if (user.fingerprintID == String(finger.fingerID)) {
+            currentUser = &user;
+            break;
+          }
+        }
+        
+        if (currentUser) {
+          firstStepVerified = true;
+          expectedVoiceCommand = currentUser->voiceCommand;
+          
+          display.clearDisplay();
+          display.print("Say wake word");
+          display.display();
+          
+          return finger.fingerID;
+        }
+      }
+    }
+  }
+  return -1;
+}
 
 // Funkcija za unos PIN-a
 void handlePasswordInput() {
-  char key = keypad.getKey();  // Čitanje unosa sa fizičkog tastature
+    User* currentUser = nullptr;
+    char key = keypad.getKey();
 
-  if (key) {
-    if (!isEnteringPin) {
-      isEnteringPin = true;
-      isWaitingForMotion = false;  // Više ne čekamo pokret
-    }
+    if (key) {
+        if (!isEnteringPin) {
+            isEnteringPin = true;
+            isWaitingForMotion = false;
+            digitalWrite(ledPin, HIGH);
+            ledState = true;
+            broadcastState("led", true);
+        }
 
-    if (key == '#') {
-      Serial.print("Unos završen: ");
-      Serial.println(enteredPassword);
-      if (enteredPassword == correctPassword) {
-        Serial.println("Ispravan PIN!");
-        displayWelcomeMessage(loggedInUser.username);  // Prikaži poruku sa imenom korisnika
-        moveServo();  // Otvaranje vrata (servo motor)
-        delay(3000);  // Zadrži poruku 3 sekunde pre povratka na "Waiting"
-        resetPIRDetection();  // Resetuj sistem na "Waiting for motion" sa normalnim fontom
-      } else {
-        // Logika za pogrešan PIN
-        attempts++;
-        if (attempts >= maxAttempts) {
-          Serial.println("Previše pogrešnih pokušaja!");
-          activateErrorLED();  // Aktiviraj crvenu LED
-          delay(3000);
-          resetPIRDetection();
+        if (key == '#') {
+            for (User &user : users) {
+                if (user.pin == enteredPassword) {
+                    currentUser = &user;
+                    break;
+                }
+            }
+
+            if (currentUser) {
+                Serial.println("Correct PIN!");
+                display.clearDisplay();
+                display.setCursor(0, 0);
+                display.print("Say wake word:");
+                display.println("'probudi se' or");
+                display.println("'hello robot'");
+                display.display();
+                
+                firstStepVerified = true;
+                expectedVoiceCommand = currentUser->voiceCommand;
+                voiceAttempts = 0;
+            } else {
+                attempts++;
+                if (attempts >= maxAttempts) {
+                    Serial.println("Too many failed attempts!");
+                    digitalWrite(blueLedPin, HIGH);
+                    alarmState = true;
+                    broadcastState("alarm", true);
+                    sendTelegramMessage("Warning: Multiple failed PIN attempts detected!");
+                    delay(3000);
+                    resetPIRDetection();
+                } else {
+                    Serial.println("Incorrect PIN!");
+                    display.clearDisplay();
+                    display.setCursor(0, 0);
+                    display.print("Enter password:");
+                    display.display();
+                }
+            }
+            
+            enteredPassword = "";
+            broadcastState("pin", false);
+            
+        } else if (key == '*') {
+            if (enteredPassword.length() > 0) {
+                enteredPassword.remove(enteredPassword.length() - 1);
+                
+                DynamicJsonDocument doc(200);
+                doc["type"] = "pin";
+                doc["value"] = enteredPassword;
+                String pinMsg;
+                serializeJson(doc, pinMsg);
+                webSocket.broadcastTXT(pinMsg);
+                
+                display.clearDisplay();
+                display.setCursor(0, 0);
+                display.print("Enter password:");
+                display.setCursor(0, 20);
+                for (int i = 0; i < enteredPassword.length(); i++) {
+                    display.print("*");
+                }
+                display.display();
+            }
         } else {
-          Serial.println("Neispravan PIN!");
-          // Očisti OLED ekran nakon pogrešnog unosa
-          display.clearDisplay();
-          display.setCursor(0, 0);
-          display.print("Enter password:");
-          display.display();
+            enteredPassword += key;
+            
+            DynamicJsonDocument doc(200);
+            doc["type"] = "pin";
+            doc["value"] = enteredPassword;
+            String pinMsg;
+            serializeJson(doc, pinMsg);
+            webSocket.broadcastTXT(pinMsg);
+            
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.print("Enter password:");
+            display.setCursor(0, 20);
+            for (int i = 0; i < enteredPassword.length(); i++) {
+                display.print("*");
+            }
+            display.display();
         }
-      }
-
-      // Resetuj PIN unos i na OLED-u i na web stranici
-      enteredPassword = "";
-      webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"\"}");  // Obriši unos PIN-a na web stranici
-
-    } else if (key == '*') {  // Briši poslednji uneti karakter
-      if (enteredPassword.length() > 0) {
-        enteredPassword.remove(enteredPassword.length() - 1);
-        // Ažuriraj prikaz na OLED-u
-        display.clearDisplay();
-        display.setCursor(0, 0);
-        display.print("Enter password:");
-        display.setCursor(0, 20);
-        for (int i = 0; i < enteredPassword.length(); i++) {
-          display.print("*");
-        }
-        display.display();
-
-        // Ažuriraj prikaz na web stranici u realnom vremenu
-        webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
-      }
-
-    } else {
-      enteredPassword += key;  // Dodaj uneseni karakter u lozinku
-
-      // Ažuriraj prikaz na OLED-u
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.print("Enter password:");
-      display.setCursor(0, 20);
-      for (int i = 0; i < enteredPassword.length(); i++) {
-        display.print("*");
-      }
-      display.display();
-
-      // Ažuriraj prikaz na web stranici u realnom vremenu
-      webSocket.broadcastTXT("{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}");
     }
-  }
+
+    // Voice command handling
+    if (firstStepVerified && currentUser) {
+        uint8_t CMDID = asr.getCMDID();
+        static bool wakeWordDetected = false;
+        
+        if (CMDID == 1 || CMDID == 2) {  // Wake word detected
+            wakeWordDetected = true;
+            Serial.println("Wake word detected!");
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.print("Say your command");
+            display.display();
+        } 
+        else if (wakeWordDetected && CMDID != 0) {
+            if (CMDID == expectedVoiceCommand.toInt()) {
+                Serial.println("Voice command verified!");
+                displayWelcomeMessage(currentUser->username);  // Show welcome message
+                moveServo();  // Open and close door
+                delay(1000);  // Short delay
+                firstStepVerified = false;
+                wakeWordDetected = false;
+                resetPIRDetection();
+            } else {
+                voiceAttempts++;
+                if (voiceAttempts >= maxVoiceAttempts) {
+                    Serial.println("Too many failed voice attempts!");
+                    digitalWrite(blueLedPin, HIGH);
+                    alarmState = true;
+                    broadcastState("alarm", true);
+                    sendTelegramMessage("Warning: Multiple failed voice command attempts detected!");
+                    firstStepVerified = false;
+                    wakeWordDetected = false;
+                    resetPIRDetection();
+                } else {
+                    display.clearDisplay();
+                    display.setCursor(0, 0);
+                    display.print("Wrong command. Try again");
+                    display.println("Attempts left: " + String(maxVoiceAttempts - voiceAttempts));
+                    display.display();
+                    delay(2000);
+                    display.clearDisplay();
+                    display.print("Say wake word");
+                    display.display();
+                    wakeWordDetected = false;
+                }
+            }
+        }
+    }
 }
 
 
 void handlePIRSensor() {
-  int pirState = digitalRead(pirPin);
-  unsigned long currentTime = millis();
+    int pirState = digitalRead(pirPin);
+    unsigned long currentTime = millis();
 
-  // Provera promene stanja PIR senzora
-  if (pirState != lastPirState) {
-    lastPirReadTime = currentTime;
-  }
-
-  // Debounce period i detekcija pokreta
-  if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
-    Serial.println("Pokret je detektovan!");
-    String detectionTime = getFormattedTime();
-    motionDetectedTime = detectionTime; // Sačuvaj vreme detekcije
-    pirActivationTime = millis();  // Beleženje vremena detekcije pokreta
-    ledTurnOnTime = millis();  // Beleženje vremena kada je LED uključena
-    digitalWrite(ledPin, HIGH);  // Uključi LED
-    ledState = true;
-    motionState = true;
-
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.print("Motion at:");
-    display.setCursor(0, 20);
-    display.print(detectionTime);
-    display.display();
-
-    isEnteringPin = true;  // Pokrenut unos PIN-a
-    isWaitingForMotion = false;  // Prestanak čekanja na pokret
-
-    // Pošalji novo stanje pokreta klijentu
-    if (loggedInClientNum != -1) {
-      String motionStatusMsg = "{\"type\":\"motion\",\"state\":true, \"time\":\"" + motionDetectedTime + "\"}";
-      webSocket.sendTXT(loggedInClientNum, motionStatusMsg);
+    if (pirState != lastPirState) {
+        lastPirReadTime = currentTime;
     }
-  }
 
-  // Provera da li je prošlo 3 minuta bez unosa šifre (isključivanje LED)
-  if (ledState && (millis() - ledTurnOnTime > ledOnTimeout)) {
-    Serial.println("Prošlo je 3 minuta, LED se isključuje.");
-    resetPIRDetection();  // Resetuje sistem i vraća u stanje čekanja pokreta
-  }
+    if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
+        Serial.println("Motion detected!");
+        String detectionTime = getFormattedTime();
+        motionDetectedTime = detectionTime;
+        pirActivationTime = millis();
+        ledTurnOnTime = millis();
 
-  lastPirState = pirState;
+        // Turn on LED and update states
+        digitalWrite(ledPin, HIGH);
+        ledState = true;
+        motionState = true;
+
+        // Broadcast LED state update
+        broadcastState("led", ledState);
+        Serial.println("LED state broadcast: ON");
+
+        // Broadcast motion state update
+        broadcastState("motion", motionState, detectionTime.c_str());
+        Serial.println("Motion state broadcast: DETECTED");
+
+        // Update OLED display
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.print("Motion at:");
+        display.setCursor(0, 20);
+        display.print(detectionTime);
+        display.display();
+
+        isEnteringPin = true;
+        isWaitingForMotion = false;
+    }
+
+    if (ledState && (currentTime - ledTurnOnTime > ledOnTimeout)) {
+        Serial.println("3 minutes passed, turning LED off.");
+        resetPIRDetection();
+    }
+
+    lastPirState = pirState;
 }
-
-
 
 void resetPIRDetection() {
-  digitalWrite(ledPin, LOW);
-  ledState = false;
+    digitalWrite(ledPin, LOW);
+    ledState = false;
+    digitalWrite(blueLedPin, LOW);
+    enteredPassword = "";
+    attempts = 0;
+    isEnteringPin = false;
+    isWaitingForMotion = true;
+    alarmState = false;
+    motionDetectedTime = "";
+    motionState = false;
 
-  digitalWrite(blueLedPin, LOW);
-  enteredPassword = "";
-  attempts = 0;
-  isEnteringPin = false;
-  isWaitingForMotion = true;
-  alarmState = false;
+    // Create and send all state updates
+    DynamicJsonDocument ledDoc(200);
+    ledDoc["type"] = "led";
+    ledDoc["state"] = false;
+    String ledMsg;
+    serializeJson(ledDoc, ledMsg);
+    webSocket.broadcastTXT(ledMsg);
 
-  motionDetectedTime = ""; // Resetuj vreme detekcije pokreta
-  motionState = false;     // Resetuj stanje pokreta
+    DynamicJsonDocument motionDoc(200);
+    motionDoc["type"] = "motion";
+    motionDoc["state"] = false;
+    motionDoc["time"] = "";
+    String motionMsg;
+    serializeJson(motionDoc, motionMsg);
+    webSocket.broadcastTXT(motionMsg);
 
-  // Pošalji novo stanje pokreta klijentu
-  if (loggedInClientNum != -1) {
-    String motionStatusMsg = "{\"type\":\"motion\",\"state\":false, \"time\":\"\"}";
-    webSocket.sendTXT(loggedInClientNum, motionStatusMsg);
-  }
+    DynamicJsonDocument pinDoc(200);
+    pinDoc["type"] = "pin";
+    pinDoc["value"] = "";
+    String pinMsg;
+    serializeJson(pinDoc, pinMsg);
+    webSocket.broadcastTXT(pinMsg);
 
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.print("Waiting for motion...");
-  display.display();
+    DynamicJsonDocument alarmDoc(200);
+    alarmDoc["type"] = "alarm";
+    alarmDoc["state"] = false;
+    String alarmMsg;
+    serializeJson(alarmDoc, alarmMsg);
+    webSocket.broadcastTXT(alarmMsg);
+
+    // Update OLED display
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("Waiting for motion...");
+    display.display();
+
+    Serial.println("All states reset and broadcast");
 }
-
 
 void moveServo() {
-  for (pos = 0; pos <= 180; pos += 1) {
-    myservo.write(pos);
-    delay(10);
-  }
-  doorState = true;  // Vrata su otvorena
+    Serial.println("Moving servo - Opening door");
+    doorState = true;
+    
+    // Broadcast door opening
+    broadcastState("doors", doorState);
 
-  // Pošalji novo stanje vrata klijentu
-  if (loggedInClientNum != -1) {
-    String doorStatusMsg = "{\"type\":\"doors\",\"state\":true}";
-    webSocket.sendTXT(loggedInClientNum, doorStatusMsg);
-  }
+    for (pos = 0; pos <= 180; pos += 1) {
+        myservo.write(pos);
+        delay(10);
+    }
+    delay(1000);
+    for (pos = 180; pos >= 0; pos -= 1) {
+        myservo.write(pos);
+        delay(10);
+    }
 
-  delay(1000);
-  for (pos = 180; pos >= 0; pos -= 1) {
-    myservo.write(pos);
-    delay(10);
-  }
-  doorState = false;  // Vrata su zatvorena
-
-  // Pošalji novo stanje vrata klijentu
-  if (loggedInClientNum != -1) {
-    String doorStatusMsg = "{\"type\":\"doors\",\"state\":false}";
-    webSocket.sendTXT(loggedInClientNum, doorStatusMsg);
-  }
+    doorState = false;
+    
+    // Broadcast door closing
+    broadcastState("doors", doorState);
+    
+    Serial.println("Door closed");
 }
-
-
 
 void activateErrorLED() {
-    digitalWrite(blueLedPin, HIGH);  
-    alarmState = true;  // Ažuriraj stanje alarma
+    digitalWrite(blueLedPin, HIGH);
+    alarmState = true;
 
-    // Pošalji Telegram poruku kada se alarm uključi
-    sendTelegramMessage("Alarm je uključen!");
+    // Broadcast alarm activation
+    broadcastState("alarm", alarmState);
 
-    // Pošalji novo stanje alarma klijentu
-    if (loggedInClientNum != -1) {
-        String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":true}";
-        webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
-    }
-
-    delay(5000);  
+    sendTelegramMessage("Alarm activated!");
+    delay(5000);
+    
     digitalWrite(blueLedPin, LOW);
-    alarmState = false;  // Ažuriraj stanje alarma
+    alarmState = false;
 
-    // Pošalji novo stanje alarma klijentu
-    if (loggedInClientNum != -1) {
-        String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":false}";
-        webSocket.sendTXT(loggedInClientNum, alarmStatusMsg);
-    }
+    // Broadcast alarm deactivation
+    broadcastState("alarm", alarmState);
 }
-
 
 
 // Funkcija koja prikazuje poruku "Welcome home (ime korisnika)" na OLED-u
 void displayWelcomeMessage(String username) {
-  display.clearDisplay();
-  display.setTextSize(1);  // Postavi veličinu teksta na 1
-
-  // Prikaži "Welcome" centrirano na ekranu
-  display.setCursor((SCREEN_WIDTH - 6 * 7) / 2, 10);  // 6 piksela po karakteru, reč "Welcome" ima 7 karaktera
-  display.print("Welcome");
-
-  // Prikaži "home!" centrirano na ekranu ispod "Welcome"
-  display.setCursor((SCREEN_WIDTH - 6 * 5) / 2, 25);  // 6 piksela po karakteru, reč "home!" ima 5 karaktera
-  display.print("home!");
-
-  // Prikaži ime korisnika centrirano na ekranu ispod "home!"
-  display.setCursor((SCREEN_WIDTH - 6 * username.length()) / 2, 40);  // Računa se dužina korisničkog imena
-  display.print(username);
-
-  // Osveži ekran
-  display.display();
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor((SCREEN_WIDTH - 6 * 7) / 2, 10);  // Center "Welcome"
+    display.print("Welcome");
+    
+    display.setCursor((SCREEN_WIDTH - 6 * 5) / 2, 25);  // Center "home!"
+    display.print("home!");
+    
+    display.setCursor((SCREEN_WIDTH - 6 * username.length()) / 2, 40);  // Center username
+    display.print(username);
+    
+    display.display();
+    delay(2000);  // Show message for 2 seconds
 }
 
 
@@ -714,6 +991,46 @@ bool isIDInUse(int id) {
     }
     return false;
 }
+
+void resetRegistrationProcess() {
+    static bool resetInProgress = false;
+    if (resetInProgress) return; // Prevent duplicate resets
+    resetInProgress = true;
+
+    Serial.println("Resetting registration process");
+    
+    // If we had an ID assigned but registration wasn't completed, release it
+    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
+        Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
+        finger.deleteModel(currentRegistration.assignedID);
+        currentRegistration.assignedID = -1;
+    }
+    
+    registrationActive = false;
+    currentStep = 0;
+    idAssigned = false;
+    isAssigningId = false;
+    fingerprintAdded = false;
+    
+    if (!fingerprintAdded) {
+        saveFingerprintAdded(false);
+    }
+    
+    // Reset the registration state
+    currentRegistration = {
+        -1,             // No ID assigned
+        false,          // Registration not complete
+        0              // No start time
+    };
+
+    if (webSocket.connectedClients() > 0) {
+        String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
+        webSocket.broadcastTXT(resetMsg);
+    }
+    
+    resetInProgress = false;
+}
+
 
 void assignFingerprintID() {
     if (!isAssigningId || idAssigned) return;
@@ -1028,44 +1345,6 @@ bool saveFingerprint() {
     }
 }
 
-void resetRegistrationProcess() {
-    static bool resetInProgress = false;
-    if (resetInProgress) return; // Prevent duplicate resets
-    resetInProgress = true;
-
-    Serial.println("Resetting registration process");
-    
-    // If we had an ID assigned but registration wasn't completed, release it
-    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
-        Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
-        finger.deleteModel(currentRegistration.assignedID);
-        currentRegistration.assignedID = -1;
-    }
-    
-    registrationActive = false;
-    currentStep = 0;
-    idAssigned = false;
-    isAssigningId = false;
-    fingerprintAdded = false;
-    
-    if (!fingerprintAdded) {
-        saveFingerprintAdded(false);
-    }
-    
-    // Reset the registration state
-    currentRegistration = {
-        -1,             // No ID assigned
-        false,          // Registration not complete
-        0              // No start time
-    };
-
-    if (webSocket.connectedClients() > 0) {
-        String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
-        webSocket.broadcastTXT(resetMsg);
-    }
-    
-    resetInProgress = false;
-}
 
 void handleGetFingerprintStatus() {
     DynamicJsonDocument jsonResponse(1024);
@@ -1379,137 +1658,162 @@ void showUserPage() {
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
     server.send(200, "text/html",
-                "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+                "<html><body><script>alert('Unauthorized access! Please log in.');</script>"
+                "<meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
     return;
   }
 
-  // Zaglavlja za sprečavanje keširanja
   server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "-1");
 
-  // Prikaz korisničke stranice sa ažuriranim HTML, CSS i JavaScript kodom
-  server.send(200, "text/html",
-              "<html><head>"
-              "<style>"
-              "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; height: 100vh; margin: 0; position: relative; }"
+  String page = F("<html><head><style>"
+    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; height: 100vh; margin: 0; position: relative; }"
+    ".wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }"
+    ".bulb { position: absolute; top: calc(40vh + 80px); left: 50%; transform: translate(-50%, -20px); width: 80px; height: 80px; background: #444; border-radius: 50%; z-index: 2; }"
+    ".bulb:before { content: ''; position: absolute; left: 22.5px; top: -50px; width: 35px; height: 80px; background: #444; border-top: 30px solid #000; border-radius: 10px; }"
+    "body.on .bulb::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; background: #fff; border-radius: 50%; filter: blur(40px); }"
+    "body.on .bulb { background-color: #fff; box-shadow: 0 0 50px #fff, 0 0 100px #fff, 0 0 150px #fff, 0 0 200px #fff, 0 0 250px #fff, 0 0 300px #fff, 0 0 350px #fff; }"
+    "body.on .bulb::before { background: #fff; }"
+    ".pin-keypad-container { display: flex; flex-direction: column; align-items: flex-start; position: absolute; left: 100px; top: 150px; }"
+    ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; margin-bottom: 10px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; flex-direction: column; justify-content: center; }"
+    ".pin-display { font-size: 22px; margin-top: 5px; }"
+    ".keypad { display: grid; grid-template-columns: repeat(4, 61px); grid-gap: 8px; margin-top: 10px; }"
+    ".key { background-color: #00d4ff; color: white; padding: 19px; font-size: 20px; border-radius: 8px; cursor: pointer; text-align: center; }"
+    ".key:hover { background-color: #00a3cc; }"
+    ".right-panel { position: absolute; top: 200px; right: 100px; display: flex; flex-direction: column; gap: 30px; }"
+    ".status-box { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; align-items: center; justify-content: center; }"
+    ".status-box.alarm-box.alarm-active { background-color: red; }"
+    ".status-box.door-box.opened { background-color: green; }"
+    ".logout-button { background-color: #00d4ff; color: white; padding: 15px; font-size: 18px; border-radius: 15px; cursor: pointer; position: absolute; top: 20px; right: 20px; }"
+    ".logout-button:hover { background-color: #00a3cc; }"
+    "</style></head><body>"
+    "<div class='wire'></div>"
+    "<div class='bulb' id='ledCircle'></div>"
+    "<div class='pin-keypad-container'>"
+    "<div class='screen'>Entered PIN:<div class='pin-display' id='pin-display'></div></div>"
+    "<div class='keypad'>"
+    "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
+    "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
+    "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
+    "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
+    "</div></div>"
+    "<div class='right-panel'>"
+    "<div class='status-box motion-box' id='motion-box'>Waiting for motion...</div>"
+    "<div class='status-box alarm-box' id='alarm-box'>No Alarm</div>"
+    "<div class='status-box door-box' id='doors-box'>Closed</div>"
+    "</div>"
+    "<a href='/logout'><button class='logout-button'>Logout</button></a>"
+// Replace this part in showUserPage function
+"<script>"
+"let ws = null;"
+"let reconnectInterval = null;"
 
-              /* Stil za žicu */
-              ".wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }"
+"async function resolveServerIP() {"
+"    try {"
+"        const response = await fetch('/ws-info');"
+"        const serverInfo = await response.text();"
+"        const ipMatch = serverInfo.match(/Server IP: ([\\d\\.]+)/);"
+"        if (ipMatch && ipMatch[1]) return ipMatch[1];"
+"        return window.location.hostname;"
+"    } catch (error) {"
+"        console.error('Failed to resolve server IP:', error);"
+"        return window.location.hostname;"
+"    }"
+"}"
 
-              /* Stil za sijalicu */
-              ".bulb { position: absolute; top: calc(40vh + 80px); left: 50%; transform: translate(-50%, -20px); width: 80px; height: 80px; background: #444; border-radius: 50%; z-index: 2; }"
-              ".bulb:before { content: ''; position: absolute; left: 22.5px; top: -50px; width: 35px; height: 80px; background: #444; border-top: 30px solid #000; border-radius: 10px; }"
+"async function connectWebSocket() {"
+"    if (ws) {"
+"        ws.close();"
+"    }"
 
-              /* Kada je sijalica upaljena */
-              "body.on .bulb::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; background: #fff; border-radius: 50%; filter: blur(40px); }"
-              "body.on .bulb { background-color: #fff; box-shadow: 0 0 50px #fff, 0 0 100px #fff, 0 0 150px #fff, 0 0 200px #fff, 0 0 250px #fff, 0 0 300px #fff, 0 0 350px #fff; }"
-              "body.on .bulb::before { background: #fff; }"
+"    const serverIP = await resolveServerIP();"
+"    const wsUrl = `ws://${serverIP}:81`;"
+"    console.log('Connecting to WebSocket at:', wsUrl);"
+    
+"    ws = new WebSocket(wsUrl);"
 
-              /* Stil za PIN i tastaturu */
-              ".pin-keypad-container { display: flex; flex-direction: column; align-items: flex-start; position: absolute; left: 100px; top: 150px; }"
-              ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; margin-bottom: 10px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; flex-direction: column; justify-content: center; }"
-              ".pin-display { font-size: 22px; margin-top: 5px; }"
-              ".keypad { display: grid; grid-template-columns: repeat(4, 61px); grid-gap: 8px; margin-top: 10px; }"
-              ".key { background-color: #00d4ff; color: white; padding: 19px; font-size: 20px; border-radius: 8px; cursor: pointer; text-align: center; }"
-              ".key:hover { background-color: #00a3cc; }"
+"    ws.onopen = function() {"
+"        console.log('WebSocket Connected');"
+"        clearInterval(reconnectInterval);"
+"        ws.send('getStates');"
+"    };"
 
-              /* Stil za statusne boksove */
-              ".right-panel { position: absolute; top: 200px; right: 100px; display: flex; flex-direction: column; gap: 30px; }"
-              ".status-box { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; align-items: center; justify-content: center; }"
-              ".status-box.motion-box { /* Individualni stilovi za Motion */ }"
-              ".status-box.alarm-box { /* Individualni stilovi za Alarm */ }"
-              ".status-box.alarm-box.alarm-active { background-color: red; }"
-              ".status-box.door-box { /* Individualni stilovi za Door */ }"
-              ".status-box.door-box.opened { background-color: green; }"
+"    ws.onclose = function() {"
+"        console.log('WebSocket Disconnected');"
+"        if (!reconnectInterval) {"
+"            reconnectInterval = setInterval(connectWebSocket, 3000);"
+"        }"
+"    };"
 
-              /* Logout dugme */
-              ".logout-button { background-color: #00d4ff; color: white; padding: 15px; font-size: 18px; border-radius: 15px; cursor: pointer; position: absolute; top: 20px; right: 20px; }"
-              ".logout-button:hover { background-color: #00a3cc; }"
-              "</style>"
-              "</head><body>"
+"    ws.onerror = function(error) {"
+"        console.error('WebSocket Error:', error);"
+"    };"
 
-              // Žica i sijalica
-              "<div class='wire'></div>"
-              "<div class='bulb' id='ledCircle'></div>"
+"    ws.onmessage = function(event) {"
+"        console.log('Received:', event.data);"
+"        try {"
+"            const data = JSON.parse(event.data);"
+"            switch(data.type) {"
+"                case 'led':"
+"                    if (data.state) {"
+"                        document.body.classList.add('on');"
+"                    } else {"
+"                        document.body.classList.remove('on');"
+"                    }"
+"                    break;"
+"                case 'motion':"
+"                    const motionBox = document.getElementById('motion-box');"
+"                    if (motionBox) {"
+"                        motionBox.innerText = data.state ? 'Motion detected at ' + data.time : 'Waiting for motion...';"
+"                        motionBox.style.backgroundColor = data.state ? '#4CAF50' : '#1A4D8A';"
+"                    }"
+"                    break;"
+"                case 'pin':"
+"                    const pinDisplay = document.getElementById('pin-display');"
+"                    if (pinDisplay) {"
+"                        pinDisplay.innerText = data.value ? '*'.repeat(data.value.length) : '';"
+"                    }"
+"                    break;"
+"                case 'alarm':"
+"                    const alarmBox = document.getElementById('alarm-box');"
+"                    if (alarmBox) {"
+"                        alarmBox.innerText = data.state ? 'ALARM' : 'No Alarm';"
+"                        alarmBox.style.backgroundColor = data.state ? '#ff0000' : '#1A4D8A';"
+"                    }"
+"                    break;"
+"                case 'doors':"
+"                    const doorBox = document.getElementById('doors-box');"
+"                    if (doorBox) {"
+"                        doorBox.innerText = data.state ? 'Door Open' : 'Door Closed';"
+"                        doorBox.style.backgroundColor = data.state ? '#4CAF50' : '#1A4D8A';"
+"                    }"
+"                    break;"
+"            }"
+"        } catch (error) {"
+"            console.error('Error processing message:', error);"
+"        }"
+"    };"
+"}"
 
-              // Ekran i tastatura
-              "<div class='pin-keypad-container'>"
-              "<div class='screen'>"
-              "Entered PIN:"
-              "<div class='pin-display' id='pin-display'></div>"
-              "</div>"
-              "<div class='keypad'>"
-              "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
-              "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
-              "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
-              "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
-              "</div>"
-              "</div>"
+// Initialize connection when page loads
+"window.addEventListener('load', connectWebSocket);"
 
-              // Desni panel sa statusnim boksovima
-              "<div class='right-panel'>"
-              "<div class='status-box motion-box' id='motion-box'>Waiting for motion...</div>"
-              "<div class='status-box alarm-box' id='alarm-box'>No Alarm</div>"
-              "<div class='status-box door-box' id='doors-box'>Closed</div>"
-              "</div>"
+// Cleanup on page unload
+"window.addEventListener('beforeunload', function() {"
+"    if (ws) {"
+"        ws.close();"
+"    }"
+"    if (reconnectInterval) {"
+"        clearInterval(reconnectInterval);"
+"    }"
+"});"
+"</script></body></html>");
 
-              // Logout dugme
-              "<a href='/logout'><button class='logout-button'>Logout</button></a>"
-
-              "<script>"
-              "let ws = new WebSocket('ws://' + window.location.hostname + ':81/');"
-              "ws.onmessage = function(event) {"
-              "  let data = JSON.parse(event.data);"
-              "  if (data.type === 'pin') {"
-              "    document.getElementById('pin-display').innerText = '*'.repeat(data.value.length);"
-              "  } else if (data.type === 'motion') {"
-              "    if (data.state) {"
-              "      document.getElementById('motion-box').innerText = 'Motion detected at ' + data.time;"
-              "      document.getElementById('motion-box').style.borderColor = 'green';"
-              "    } else {"
-              "      document.getElementById('motion-box').innerText = 'Waiting for motion...';"
-              "      document.getElementById('motion-box').style.borderColor = 'white';"
-              "    }"
-              "  } else if (data.type === 'led') {"
-              "    toggleLed(data.state);"
-              "  } else if (data.type === 'alarm') {"
-              "    toggleAlarm(data.state);"
-              "  } else if (data.type === 'doors') {"
-              "    updateDoorStatus(data.state);"
-              "  }"
-              "};"
-              "function toggleLed(isOn) {"
-              "  const body = document.querySelector('body');"
-              "  if (isOn) {"
-              "    body.classList.add('on');"
-              "  } else {"
-              "    body.classList.remove('on');"
-              "  }"
-              "}"
-              "function toggleAlarm(isActive) {"
-              "  const alarmBox = document.getElementById('alarm-box');"
-              "  if (isActive) {"
-              "    alarmBox.classList.add('alarm-active');"
-              "    alarmBox.innerText = 'ALARM';"
-              "  } else {"
-              "    alarmBox.classList.remove('alarm-active');"
-              "    alarmBox.innerText = 'No Alarm';"
-              "  }"
-              "}"
-              "function updateDoorStatus(isOpened) {"
-              "  const doorBox = document.getElementById('doors-box');"
-              "  doorBox.innerText = isOpened ? 'Opened' : 'Closed';"
-              "  if (isOpened) {"
-              "    doorBox.classList.add('opened');"
-              "  } else {"
-              "    doorBox.classList.remove('opened');"
-              "  }"
-              "}"
-              "</script>"
-
-              "</body></html>");
+  server.send(200, "text/html", page);
 }
+
+
 
 
 
@@ -1635,16 +1939,16 @@ void showAddUserPage() {
                 <div id="fingerprint-error" class="error-message"></div>
 
                 <label for="voice-command" class="voice-command-label">Voice command:</label>
-                <select name="voiceCommand" id="voice-command" class="dropdown">
-                    <option value="">Please select a command</option>
-                    <option value="option1">Option 1</option>
-                    <option value="option2">Option 2</option>
-                    <option value="option3">Option 3</option>
-                    <option value="option4">Option 4</option>
-                    <option value="option5">Option 5</option>
-                    <option value="option6">Option 6</option>
-                    <option value="option7">Option 7</option>
-                </select>
+                  <select name="voiceCommand" id="voice-command" class="dropdown">
+                      <option value="">Please select a command</option>
+                      <option value="5">otvori se</option>
+                      <option value="6">otključaj</option> 
+                      <option value="7">zatvori</option>
+                      <option value="47">forget</option>
+                      <option value="82">reset</option>
+                      <option value="130">auto mode</option>
+                      <option value="141">open the door</option>
+                  </select>
                 <div id="voice-command-error" class="error-message"></div>
 
                 <div class="captcha" id="captcha-section">
@@ -2683,6 +2987,18 @@ void handleLogout() {
 void setup() {
     Serial.begin(115200);
     randomSeed(analogRead(0));
+    Wire.begin(21, 22);
+    Wire.setClock(50000);  // Slower speed for better stability
+
+     
+    
+    Serial.println("I2C Scanner");
+    for(byte address = 1; address < 127; address++) {
+      Wire.beginTransmission(address);
+      if (Wire.endTransmission() == 0) {
+        Serial.printf("Device found at address 0x%02X\n", address);
+      }
+    }
     
     mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
     finger.begin(57600);
@@ -2733,8 +3049,26 @@ void setup() {
     webSocket.onEvent(webSocketEvent);
     webSocket.enableHeartbeat(15000, 3000, 2);
 
+       server.begin();
+
     initializeRegistrationState();
     cleanupOrphanedFingerprints();
+
+    if (!asr.begin()) {
+        Serial.println("Communication failed, check connection");
+        delay(3000);
+    }
+    Serial.println("Voice sensor initialization successful!");
+    
+    asr.setVolume(7);  // Set volume
+    asr.setMuteMode(0);  // Sound mode (0: enabled, 1: disabled) 
+    asr.setWakeTime(20);  // Set wake duration
+
+      uint8_t wakeTime = asr.getWakeTime();
+      Serial.print("wakeTime = ");
+      Serial.println(wakeTime);
+    
+      Serial.println("Sistem spreman za prepoznavanje govora.");
 
 
     Serial.print("WebSocket server running on: ws://");
@@ -2830,7 +3164,7 @@ void setup() {
         server.send(200, "text/html", html);
     });
 
-    server.begin();
+
 
     // Servo Setup
     ESP32PWM::allocateTimer(0);
@@ -2888,31 +3222,31 @@ void loop() {
     if (DEBUG_REGISTRATION) {
         if (registrationActive) {
             if (currentMillis - lastRegistrationDebug >= REGISTRATION_DEBUG_INTERVAL) {
-//                Serial.println("\n=== Registration Process Debug ===");
-//                Serial.printf("Current Step: %d\n", currentStep);
-//                Serial.printf("ID Assigned: %s\n", idAssigned ? "Yes" : "No");
-//                Serial.printf("Fingerprint Added: %s\n", fingerprintAdded ? "Yes" : "No");
-//                Serial.printf("Registration Active: %s\n", registrationActive ? "Yes" : "No");
-//                Serial.printf("Time since last debug: %lu ms\n", currentMillis - lastRegistrationDebug);
+                Serial.println("\n=== Registration Process Debug ===");
+                Serial.printf("Current Step: %d\n", currentStep);
+                Serial.printf("ID Assigned: %s\n", idAssigned ? "Yes" : "No");
+                Serial.printf("Fingerprint Added: %s\n", fingerprintAdded ? "Yes" : "No");
+                Serial.printf("Registration Active: %s\n", registrationActive ? "Yes" : "No");
+                Serial.printf("Time since last debug: %lu ms\n", currentMillis - lastRegistrationDebug);
                 lastRegistrationDebug = currentMillis;
 //                Serial.printf("WebSocket Clients Connected: %d\n", webSocket.connectedClients());
             }
         } else if (currentMillis - lastRegistrationDebug >= 5000) {
-            //Serial.println("Registration is not active. Current status:");
-            //checkDebugStatus();
+            Serial.println("Registration is not active. Current status:");
+            checkDebugStatus();
             lastRegistrationDebug = currentMillis;
         }
     }
 
     // WebSocket status debug output
-//    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
-//        Serial.println("\n=== WebSocket Server Status ===");
-//        Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
-//        Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
-//        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
-//        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
-//        lastDebugPrint = currentMillis;
-//    }
+    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
+        Serial.println("\n=== WebSocket Server Status ===");
+        Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
+        Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+        lastDebugPrint = currentMillis;
+    }
 
     // WebSocket ping
     if (currentMillis - lastPing > 15000) {
@@ -3024,7 +3358,7 @@ void loop() {
     // Print periodic status update
     static unsigned long lastStatus = 0;
     if (currentMillis - lastStatus > 5000) {
-        //Serial.printf("Connected WebSocket clients: %d\n", webSocket.connectedClients());
+        Serial.printf("Connected WebSocket clients: %d\n", webSocket.connectedClients());
         lastStatus = currentMillis;
     }
 }
