@@ -46,7 +46,11 @@ struct User {
   String voiceCommand;  
 };
 
-
+struct RegistrationState {
+    int assignedID;
+    bool registrationComplete;
+    unsigned long startTime;
+} currentRegistration;
 
 // Lista korisnika
 std::vector<User> users;
@@ -141,6 +145,32 @@ void sendTelegramMessage(const String& message) {
     }
 
     http.end();
+}
+
+bool isIDLinkedToUser(int id) {
+    for (const User &user : users) {
+        if (user.fingerprintID.toInt() == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void initializeRegistrationState() {
+    currentRegistration = {
+        -1,             // No ID assigned
+        false,          // Registration not complete
+        0              // No start time
+    };
+}
+
+void checkRegistrationTimeout() {
+    if (registrationActive && currentRegistration.startTime > 0) {
+        if (millis() - currentRegistration.startTime > 180000) { // 3 minutes
+            Serial.println("Registration timed out");
+            resetRegistrationProcess();
+        }
+    }
 }
 
 void startFingerprintRegistration() {
@@ -244,17 +274,30 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
                     }
                 }
                 else if (text == "cancel") {
-                    Serial.println("[WebSocket] Received cancel command");
-                    resetRegistrationProcess();
-                    
-                    DynamicJsonDocument doc(200);
-                    doc["type"] = "progress";
-                    doc["step"] = 0;
-                    doc["message"] = "Registration cancelled";
-                    String response;
-                    serializeJson(doc, response);
-                    webSocket.sendTXT(num, response);
-                }
+                  Serial.println("[WebSocket] Received cancel command");
+                  
+                  // Only reset the registration process if it wasn't completed
+                  if (!currentRegistration.registrationComplete) {
+                      resetRegistrationProcess();
+                      
+                      DynamicJsonDocument doc(200);
+                      doc["type"] = "progress";
+                      doc["step"] = 0;
+                      doc["message"] = "Registration cancelled";
+                      String response;
+                      serializeJson(doc, response);
+                      webSocket.sendTXT(num, response);
+                  } else {
+                      // If registration was complete, just close the WebSocket gracefully
+                      DynamicJsonDocument doc(200);
+                      doc["type"] = "progress";
+                      doc["step"] = 3;
+                      doc["message"] = "Registration complete";
+                      String response;
+                      serializeJson(doc, response);
+                      webSocket.sendTXT(num, response);
+                  }
+              }
             }
             break;
 
@@ -626,6 +669,30 @@ int generateNewFingerprintID() {
     return -1;  // Nema slobodnih ID-eva
 }
 
+void cleanupOrphanedFingerprints() {
+    Serial.println("Cleaning up orphaned fingerprints...");
+    
+    // First get all IDs that are actually in use by users
+    std::vector<int> usedIDs;
+    for (const User& user : users) {
+        if (!user.fingerprintID.isEmpty()) {
+            usedIDs.push_back(user.fingerprintID.toInt());
+        }
+    }
+    
+    // Check each ID in the sensor
+    for (int id = 1; id <= finger.capacity; id++) {
+        if (finger.loadModel(id) == FINGERPRINT_OK) {
+            // If this ID exists in sensor but not in users list, delete it
+            if (std::find(usedIDs.begin(), usedIDs.end(), id) == usedIDs.end()) {
+                Serial.printf("Deleting orphaned fingerprint ID: %d\n", id);
+                finger.deleteModel(id);
+            }
+        }
+    }
+    Serial.println("Cleanup complete");
+}
+
 
 
 bool checkIDAvailability(int id) {
@@ -672,6 +739,14 @@ void assignFingerprintID() {
         lastProgressUpdate = millis();
     }
 
+    // Check and release any previously assigned ID that wasn't completed
+    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
+        Serial.printf("Found incomplete registration with ID %d, releasing it...\n", 
+            currentRegistration.assignedID);
+        finger.deleteModel(currentRegistration.assignedID);
+        currentRegistration.assignedID = -1;
+    }
+    
     // First check if we have a previous incomplete registration
     if (fingerprintID > 0 && !isIDInUse(fingerprintID)) {
         // Try to reuse the previous ID
@@ -680,6 +755,9 @@ void assignFingerprintID() {
             // Successfully found and can reuse the ID
             idAssigned = true;
             isAssigningId = false;
+            currentRegistration.assignedID = fingerprintID;
+            currentRegistration.registrationComplete = false;
+            currentRegistration.startTime = millis();
             
             DynamicJsonDocument doc(200);
             doc["type"] = "progress";
@@ -702,6 +780,10 @@ void assignFingerprintID() {
             uint8_t p = finger.loadModel(id);
             if (p != FINGERPRINT_OK) {  // Then check if ID slot is empty in the sensor
                 fingerprintID = id;
+                currentRegistration.assignedID = id;
+                currentRegistration.registrationComplete = false;
+                currentRegistration.startTime = millis();
+                
                 idAssigned = true;
                 isAssigningId = false;
                 
@@ -756,11 +838,13 @@ void refreshFingerprintIDs() {
 void sendProgressUpdate(int step, const String& message) {
     if (!registrationActive) return;
 
-    int progressValue = mapProgress(0, step); // Use mapProgress for consistent calculation
+    // Fix: For step 3 (completion), we should always use 100%
+    int progressValue = (step == 3) ? 100 : mapProgress(0, step);
+    
     DynamicJsonDocument doc(1024);
     doc["type"] = "progress";
     doc["step"] = step;
-    doc["progressValue"] = progressValue;
+    doc["progressValue"] = progressValue;  // This will now be 100% for step 3
     doc["animate"] = false;
     doc["message"] = message;
 
@@ -776,6 +860,9 @@ void sendProgressUpdate(int step, const String& message) {
 
 
 int mapProgress(int stepProgress, int stepNumber) {
+    // If it's the final step, always return 100%
+    if (stepNumber == 3) return 100;
+    
     const int RANGES[4][2] = {
         {0, 25},    // Step 0: ID Assignment (Ends at 25%)
         {25, 50},   // Step 1: First Scan (Starts at 25%, Ends at 50%)
@@ -914,6 +1001,9 @@ bool saveFingerprint() {
         Serial.println("Fingerprint stored successfully.");
         fingerprintAdded = true;
         saveFingerprintAdded(true);
+           
+        // Mark this registration as complete
+        currentRegistration.registrationComplete = true;
         
         // Send final completion message
         DynamicJsonDocument doc(200);
@@ -931,6 +1021,9 @@ bool saveFingerprint() {
         return true;
     } else {
         Serial.println("Error storing fingerprint.");
+        // Registration failed, release the ID
+        finger.deleteModel(fingerprintID);
+        currentRegistration.assignedID = -1;
         return false;
     }
 }
@@ -941,23 +1034,38 @@ void resetRegistrationProcess() {
     resetInProgress = true;
 
     Serial.println("Resetting registration process");
+    
+    // If we had an ID assigned but registration wasn't completed, release it
+    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
+        Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
+        finger.deleteModel(currentRegistration.assignedID);
+        currentRegistration.assignedID = -1;
+    }
+    
     registrationActive = false;
     currentStep = 0;
     idAssigned = false;
     isAssigningId = false;
-
+    fingerprintAdded = false;
+    
     if (!fingerprintAdded) {
         saveFingerprintAdded(false);
     }
+    
+    // Reset the registration state
+    currentRegistration = {
+        -1,             // No ID assigned
+        false,          // Registration not complete
+        0              // No start time
+    };
 
     if (webSocket.connectedClients() > 0) {
         String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
         webSocket.broadcastTXT(resetMsg);
     }
-
+    
     resetInProgress = false;
 }
-
 
 void handleGetFingerprintStatus() {
     DynamicJsonDocument jsonResponse(1024);
@@ -1838,12 +1946,21 @@ function handleFingerprintMessage(data) {
 }
 
 function handleCancelConfirmation() {
+    if (!registrationInProgress) {
+        console.warn("Cancel ignored: No active registration.");
+        return;
+    }
+    
+    // Only reset registration in progress, but keep the fingerprint status
     registrationInProgress = false;
     document.getElementById('fingerprint-modal').style.display = 'none';
+    
+    // Don't reset the fingerprint status if it was successfully added
     if (!fingerprintAdded) {
         resetFingerprintButton();
     }
 }
+
 
 function disableFingerprintButton() {
     const fingerprintButton = document.getElementById("add-fingerprint");
@@ -1857,6 +1974,39 @@ function resetFingerprintButton() {
     fingerprintButton.disabled = false;
     fingerprintButton.style.backgroundColor = "#00d4ff";
     fingerprintButton.style.cursor = "pointer";
+}
+
+function updateFingerprintStatus(isComplete) {
+    const fingerprintButton = document.getElementById("add-fingerprint");
+    const fingerprintError = document.getElementById("fingerprint-error");
+    
+    if (isComplete) {
+        // Disable button
+        fingerprintButton.disabled = true;
+        fingerprintButton.style.backgroundColor = "#aaa7ad";
+        fingerprintButton.style.cursor = "not-allowed";
+        
+        // Clear error message
+        if (fingerprintError) {
+            fingerprintError.innerText = '';
+        }
+        
+        // Set the global state
+        fingerprintAdded = true;
+    } else {
+        // Reset button
+        fingerprintButton.disabled = false;
+        fingerprintButton.style.backgroundColor = "#00d4ff";
+        fingerprintButton.style.cursor = "pointer";
+        
+        // Show error message
+        if (fingerprintError) {
+            fingerprintError.innerText = 'Fingerprint not added';
+        }
+        
+        // Reset the global state
+        fingerprintAdded = false;
+    }
 }
 
 function showFingerprintModal() {
@@ -1963,6 +2113,7 @@ window.addEventListener('load', async () => {
 
 function closeFingerprintModal() {
     console.log('Closing fingerprint modal...');
+    console.log('Current fingerprint status:', fingerprintAdded);
     
     if (ws && ws.readyState === WebSocket.OPEN) {
         console.log('Sending cancel command to server...');
@@ -1975,40 +2126,27 @@ function closeFingerprintModal() {
         progressBar.style.setProperty('--value', '0');
         progressBar.setAttribute('aria-valuenow', '0');
     }
-    document.getElementById('fingerprint-status').innerText = 'Ready to start...';
     
-    resetRegistrationState();
+    // Only reset the status message if fingerprint wasn't successfully added
+    if (!fingerprintAdded) {
+        document.getElementById('fingerprint-status').innerText = 'Ready to start...';
+    }
     
+    // Only partially reset the registration state
+    registrationInProgress = false;
+    
+    // Don't reset the fingerprint button if registration was successful
     const fingerprintButton = document.getElementById('add-fingerprint');
     if (fingerprintButton && !fingerprintAdded) {
         resetFingerprintButton();
     }
-}
-
-function handleConnectionError(message) {
-    console.error('Connection error:', message);
-    const status = document.getElementById('fingerprint-status');
-    if (status) {
-        status.innerText = `Error: ${message}`;
-        status.style.color = 'red';
-    }
-    registrationInProgress = false;
-}
-
-function resetRegistrationState() {
-    console.log('Resetting registration state...');
-    registrationInProgress = false;
     
-    if (ws) {
-        try {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send("cancel");
-                ws.close();
-            }
-        } catch (e) {
-            console.error('Error during WebSocket cleanup:', e);
+    // Clear any error messages if fingerprint was successfully added
+    if (fingerprintAdded) {
+        const fingerprintError = document.getElementById('fingerprint-error');
+        if (fingerprintError) {
+            fingerprintError.innerText = '';
         }
-        ws = null;
     }
 }
 
@@ -2029,23 +2167,42 @@ function updateProgress(step, message) {
         case 1: targetValue = 50; break;
         case 2: targetValue = 75; break;
         case 3: 
-            targetValue = 100;
+            targetValue = 100;  // Make sure it's 100% for completion
             registrationInProgress = false;
             fingerprintAdded = true;
-            disableFingerprintButton();
-            // Clear error message on successful completion
+            updateFingerprintStatus(true);  // This will update both button and error states
+            
+            // Remove error message
             if (fingerprintError) {
                 fingerprintError.innerText = '';
             }
+            
+            // Update progress bar to 100%
+            progressBar.style.setProperty('--value', '100');
+            progressBar.setAttribute('aria-valuenow', '100');
             break;
         default: targetValue = 0;
     }
 
-    progressBar.style.setProperty('--value', targetValue.toString());
-    progressBar.setAttribute('aria-valuenow', targetValue.toString());
+    // Only update progress if not step 3 (since step 3 handles it separately above)
+    if (step !== 3) {
+        progressBar.style.setProperty('--value', targetValue.toString());
+        progressBar.setAttribute('aria-valuenow', targetValue.toString());
+    }
+    
     status.innerText = message;
     
     console.log(`Progress updated - Value: ${targetValue}, Message: ${message}`);
+}
+
+function handleConnectionError(message) {
+    console.error('Connection error:', message);
+    const status = document.getElementById('fingerprint-status');
+    if (status) {
+        status.innerText = `Error: ${message}`;
+        status.style.color = 'red';
+    }
+    registrationInProgress = false;
 }
 
 
@@ -2084,9 +2241,13 @@ window.onbeforeunload = function() {
 document.addEventListener('DOMContentLoaded', function() {
     var form = document.getElementById('addUserForm');
     form.addEventListener('submit', function(event) {
-        event.preventDefault();
-        
-        var formData = new FormData(form);
+    event.preventDefault();
+    
+    console.log("Form submission - Current states:");
+    console.log("fingerprintAdded:", fingerprintAdded);
+    console.log("registrationInProgress:", registrationInProgress);
+    
+    var formData = new FormData(form);
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/addUser', true);
 
@@ -2172,6 +2333,53 @@ document.addEventListener('DOMContentLoaded', function() {
     server.send(200, "text/html", pageContent);
 }
 
+// Funkcija za prikaz admin panela
+void showAdminPage() {
+  if (!loggedIn || loggedInUser.username != "admin") {
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
+    server.send(200, "text/html",
+                "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+    return;
+  }
+
+  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "-1");
+
+  String page = "<html><head><style>"
+                " body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+                ".container { display: flex; justify-content: center; align-items: center; flex-direction: column; height: 100vh; }"
+                "table { width: 60%; border-collapse: collapse; margin: 20px auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 0 20px rgba(0, 0, 0, 0.1); }"
+                "th, td { padding: 15px; text-align: left; border-bottom: 1px solid #ddd; }"
+                "th { background-color: #1A4D8A; color: white; }"
+                "td { color: #333; }"
+                "tr:hover { background-color: #f1f1f1; }"
+                "td + td { border-left: 1px solid #ddd; }"
+                ".delete-button { background-color: red; color: white; padding: 10px; border: none; border-radius: 10px; cursor: pointer; }"
+                ".delete-button:hover { background-color: darkred; }"
+                ".logout-button { background-color: #1A4D8A; color: white; padding: 20px; font-size: 18px; border: none; border-radius: 25px; cursor: pointer; margin-top: 20px; }"
+                ".logout-button:hover { background-color: #155082; }"
+                "</style></head><body>"
+                "<div class='container'><h1>Admin Panel</h1>"
+                "<table><tr><th>Username</th><th>Action</th></tr>";
+
+  // Prikaz admin korisnika prvo
+  page += "<tr><td>admin</td><td>Default User</td></tr>";
+
+  // Prikaz ostalih korisnika
+  for (User &user : users) {
+    if (user.username != "admin") {
+      page += "<tr><td>" + user.username + "</td>"
+              "<td><a href='/delete?username=" + user.username + "'><button class='delete-button'>Delete</button></a></td></tr>";
+    }
+  }
+
+  page += "</table><a href='/logout'><button class='logout-button'>Logout</button></a></div></body></html>";
+  server.send(200, "text/html", page);
+}
+
 
 
 
@@ -2225,12 +2433,36 @@ void handleAddUser() {
     // Get form data
     String enteredUsername = server.arg("username");
     String selectedVoiceCommand = server.arg("voiceCommand");
-    bool isFingerprintAdded = getFingerprintAdded();
+    
+    // Add debug prints
+    Serial.printf("Current Registration State:\n");
+    Serial.printf("fingerprintAdded: %s\n", fingerprintAdded ? "true" : "false");
+    Serial.printf("currentRegistration.registrationComplete: %s\n", 
+                 currentRegistration.registrationComplete ? "true" : "false");
+    Serial.printf("currentRegistration.assignedID: %d\n", 
+                 currentRegistration.assignedID);
+    
+    // Check both registration completion and assigned ID
+    bool isFingerprintValid = fingerprintAdded && 
+                            currentRegistration.registrationComplete && 
+                            currentRegistration.assignedID > 0;
 
-    Serial.printf("Received data - Username: %s, Voice Command: %s, Fingerprint Added: %s\n",
+    // Validation checks
+    if (!isFingerprintValid) {
+        Serial.println("Fingerprint validation failed:");
+        Serial.printf("fingerprintAdded: %s\n", fingerprintAdded ? "true" : "false");
+        Serial.printf("registrationComplete: %s\n", 
+                     currentRegistration.registrationComplete ? "true" : "false");
+        Serial.printf("assignedID: %d\n", currentRegistration.assignedID);
+        errors["fingerprint"] = "Fingerprint not added.";
+        success = false;
+    }
+
+    Serial.printf("Received data - Username: %s, Voice Command: %s, Fingerprint Added: %s, Registration Complete: %s\n",
                  enteredUsername.c_str(), 
                  selectedVoiceCommand.c_str(), 
-                 isFingerprintAdded ? "true" : "false");
+                 fingerprintAdded ? "true" : "false",
+                 currentRegistration.registrationComplete ? "true" : "false");
 
     // Validate CAPTCHA
     if (!server.hasArg("captcha")) {
@@ -2265,8 +2497,8 @@ void handleAddUser() {
     }
 
     // Fingerprint validation
-    if (!isFingerprintAdded) {
-        Serial.println("Fingerprint not added");
+    if (!fingerprintAdded || !currentRegistration.registrationComplete) {
+        Serial.println("Fingerprint not properly added or registration incomplete");
         errors["fingerprint"] = "Fingerprint not added.";
         success = false;
     }
@@ -2289,14 +2521,14 @@ void handleAddUser() {
     }
 
     // All validations passed, proceed with user creation
-    Serial.printf("Current Fingerprint ID before saving: %d\n", fingerprintID);
+    Serial.printf("Current Fingerprint ID: %d\n", fingerprintID);
 
-    // Generate new PIN for user
+    // Generate new PIN
     String newPin = generateUniquePin();
     Serial.printf("Generated PIN: %s\n", newPin.c_str());
 
-    // Create new user
-    String fingerprintID_str = String(fingerprintID);
+    // Create new user with current fingerprint ID
+    String fingerprintID_str = String(currentRegistration.assignedID);
     User newUser = {
         enteredUsername,
         newPin,
@@ -2314,9 +2546,14 @@ void handleAddUser() {
                  fingerprintID_str.c_str(), 
                  selectedVoiceCommand.c_str());
 
-    // Reset fingerprint status
+    // Reset registration states
     fingerprintAdded = false;
     saveFingerprintAdded(false);
+    currentRegistration = {
+        -1,             // Reset assigned ID
+        false,          // Reset completion status
+        0              // Reset start time
+    };
 
     // Prepare success response
     jsonResponse["success"] = true;
@@ -2428,55 +2665,6 @@ void handleUserDeletion() {
 
 
 
-// Funkcija za prikaz admin panela
-void showAdminPage() {
-  if (!loggedIn || loggedInUser.username != "admin") {
-    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-    server.sendHeader("Pragma", "no-cache");
-    server.sendHeader("Expires", "-1");
-    server.send(200, "text/html",
-                "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
-    return;
-  }
-
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "-1");
-
-  String page = "<html><head><style>"
-                " body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-                ".container { display: flex; justify-content: center; align-items: center; flex-direction: column; height: 100vh; }"
-                "table { width: 60%; border-collapse: collapse; margin: 20px auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 0 20px rgba(0, 0, 0, 0.1); }"
-                "th, td { padding: 15px; text-align: left; border-bottom: 1px solid #ddd; }"
-                "th { background-color: #1A4D8A; color: white; }"
-                "td { color: #333; }"
-                "tr:hover { background-color: #f1f1f1; }"
-                "td + td { border-left: 1px solid #ddd; }"
-                ".delete-button { background-color: red; color: white; padding: 10px; border: none; border-radius: 10px; cursor: pointer; }"
-                ".delete-button:hover { background-color: darkred; }"
-                ".logout-button { background-color: #1A4D8A; color: white; padding: 20px; font-size: 18px; border: none; border-radius: 25px; cursor: pointer; margin-top: 20px; }"
-                ".logout-button:hover { background-color: #155082; }"
-                "</style></head><body>"
-                "<div class='container'><h1>Admin Panel</h1>"
-                "<table><tr><th>Username</th><th>Action</th></tr>";
-
-  // Prikaz admin korisnika prvo
-  page += "<tr><td>admin</td><td>Default User</td></tr>";
-
-  // Prikaz ostalih korisnika
-  for (User &user : users) {
-    if (user.username != "admin") {
-      page += "<tr><td>" + user.username + "</td>"
-              "<td><a href='/delete?username=" + user.username + "'><button class='delete-button'>Delete</button></a></td></tr>";
-    }
-  }
-
-  page += "</table><a href='/logout'><button class='logout-button'>Logout</button></a></div></body></html>";
-  server.send(200, "text/html", page);
-}
-
-
-
 // Funkcija za odjavu korisnika
 void handleLogout() {
   loggedIn = false;
@@ -2545,9 +2733,13 @@ void setup() {
     webSocket.onEvent(webSocketEvent);
     webSocket.enableHeartbeat(15000, 3000, 2);
 
+    initializeRegistrationState();
+    cleanupOrphanedFingerprints();
+
+
     Serial.print("WebSocket server running on: ws://");
-Serial.print(WiFi.localIP());
-Serial.println(":81");
+  Serial.print(WiFi.localIP());
+  Serial.println(":81");
 
     // Server Routes Setup
     server.enableCORS(true);  // This is the correct way to enable CORS on ESP32
@@ -2696,31 +2888,31 @@ void loop() {
     if (DEBUG_REGISTRATION) {
         if (registrationActive) {
             if (currentMillis - lastRegistrationDebug >= REGISTRATION_DEBUG_INTERVAL) {
-                Serial.println("\n=== Registration Process Debug ===");
-                Serial.printf("Current Step: %d\n", currentStep);
-                Serial.printf("ID Assigned: %s\n", idAssigned ? "Yes" : "No");
-                Serial.printf("Fingerprint Added: %s\n", fingerprintAdded ? "Yes" : "No");
-                Serial.printf("Registration Active: %s\n", registrationActive ? "Yes" : "No");
-                Serial.printf("Time since last debug: %lu ms\n", currentMillis - lastRegistrationDebug);
+//                Serial.println("\n=== Registration Process Debug ===");
+//                Serial.printf("Current Step: %d\n", currentStep);
+//                Serial.printf("ID Assigned: %s\n", idAssigned ? "Yes" : "No");
+//                Serial.printf("Fingerprint Added: %s\n", fingerprintAdded ? "Yes" : "No");
+//                Serial.printf("Registration Active: %s\n", registrationActive ? "Yes" : "No");
+//                Serial.printf("Time since last debug: %lu ms\n", currentMillis - lastRegistrationDebug);
                 lastRegistrationDebug = currentMillis;
-                Serial.printf("WebSocket Clients Connected: %d\n", webSocket.connectedClients());
+//                Serial.printf("WebSocket Clients Connected: %d\n", webSocket.connectedClients());
             }
         } else if (currentMillis - lastRegistrationDebug >= 5000) {
-            Serial.println("Registration is not active. Current status:");
-            checkDebugStatus();
+            //Serial.println("Registration is not active. Current status:");
+            //checkDebugStatus();
             lastRegistrationDebug = currentMillis;
         }
     }
 
     // WebSocket status debug output
-    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
-        Serial.println("\n=== WebSocket Server Status ===");
-        Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
-        Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
-        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
-        lastDebugPrint = currentMillis;
-    }
+//    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
+//        Serial.println("\n=== WebSocket Server Status ===");
+//        Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
+//        Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+//        Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
+//        Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+//        lastDebugPrint = currentMillis;
+//    }
 
     // WebSocket ping
     if (currentMillis - lastPing > 15000) {
@@ -2731,6 +2923,8 @@ void loop() {
     // PIR Sensor and Password Input handling
     handlePIRSensor();
     handlePasswordInput();
+    checkRegistrationTimeout();
+
 
     // Fingerprint Registration Process
     if (registrationActive) {
@@ -2788,6 +2982,7 @@ void loop() {
                         Serial.println("Fingerprint saved successfully");
                         sendProgressUpdate(3, "Registration complete!");
                         fingerprintAdded = true;
+                        currentRegistration.registrationComplete = true;
                         saveFingerprintAdded(true);
                         registrationActive = false;
                         stepCompleted = true;
@@ -2829,7 +3024,7 @@ void loop() {
     // Print periodic status update
     static unsigned long lastStatus = 0;
     if (currentMillis - lastStatus > 5000) {
-        Serial.printf("Connected WebSocket clients: %d\n", webSocket.connectedClients());
+        //Serial.printf("Connected WebSocket clients: %d\n", webSocket.connectedClients());
         lastStatus = currentMillis;
     }
 }
