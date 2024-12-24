@@ -24,6 +24,10 @@
 #define DEBUG_INTERVAL 5000
 #define DEBUG_REGISTRATION true
 #define REGISTRATION_DEBUG_INTERVAL 1000
+#define OLED_SDA 21
+#define OLED_SCL 22
+#define VOICE_SDA 33
+#define VOICE_SCL 32
 
 unsigned long lastDebugPrint = 0;
 unsigned long lastPing = 0;
@@ -32,7 +36,7 @@ volatile int connectedClients = 0;
 bool clientConnected[MAX_CLIENTS] = {false};
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-DFRobot_DF2301Q_I2C asr;
+DFRobot_DF2301Q_I2C asr(&Wire1);
 
 const char *ssid = "MS";
 const char *password = "zastomezezas";
@@ -64,7 +68,7 @@ bool userAdded = false;
 User loggedInUser = {"", ""};
 
 const int ledPin = 5;
-const int pirPin = 15;
+const int pirPin = 23;
 bool motionDetected = false;  // Flag za praćenje detekcije pokreta
 const int blueLedPin = 2;  // Pin za plavu LED diodu (GPIO 2)
 int blockTime = 0; // Vreme koje blokira korisnika nakon 3 pogrešna unosa
@@ -101,6 +105,9 @@ int lastDebuggedStep = -1;
 bool lastDebuggedIDAssigned = false;
 bool lastDebuggedFingerprintAdded = false;
 bool lastDebuggedRegistrationActive = false;
+static bool wakeWordDetected = false;
+User* authenticatedUser = nullptr;  // Global pointer to store authenticated user
+
 
 HardwareSerial mySerial(2); // Koristi Serial2 za komunikaciju sa senzorom
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
@@ -117,7 +124,7 @@ char keys[ROWS][COLS] = {
 };
 
 byte rowPins[ROWS] = {13, 12, 14, 27};
-byte colPins[COLS] = {26, 25, 33, 32};
+byte colPins[COLS] = {26, 25, 15, 2};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
@@ -241,6 +248,18 @@ void checkRegistrationTimeout() {
     }
 }
 
+// Čuvanje otiska u memoriju
+void saveFingerprintAdded(bool status) {
+    File file = SPIFFS.open("/fingerprintAdded.txt", FILE_WRITE);
+    if (!file) {
+        Serial.println("Failed to open file for writing");
+        return;
+    }
+    file.print(status ? "true" : "false");
+    file.close();
+    Serial.println("Saved fingerprintAdded to SPIFFS");
+}
+
 void startFingerprintRegistration() {
     Serial.println("\n[Registration] Starting new fingerprint registration...");
     logRegistrationStatus("Before Registration Start");
@@ -316,14 +335,53 @@ void updateDoorState(bool state) {
 }
 
 void updatePINState(const String& pin) {
-    DynamicJsonDocument doc(256);
+    DynamicJsonDocument doc(200);
     doc["type"] = "pin";
     doc["value"] = pin;
-    
-    String message;
-    serializeJson(doc, message);
-    webSocket.broadcastTXT(message);
+    String pinMsg;
+    serializeJson(doc, pinMsg);
+    webSocket.broadcastTXT(pinMsg);
 }
+
+void resetRegistrationProcess() {
+    static bool resetInProgress = false;
+    if (resetInProgress) return; // Prevent duplicate resets
+    resetInProgress = true;
+
+    Serial.println("Resetting registration process");
+    
+    // If we had an ID assigned but registration wasn't completed, release it
+    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
+        Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
+        finger.deleteModel(currentRegistration.assignedID);
+        currentRegistration.assignedID = -1;
+    }
+    
+    registrationActive = false;
+    currentStep = 0;
+    idAssigned = false;
+    isAssigningId = false;
+    fingerprintAdded = false;
+    
+    if (!fingerprintAdded) {
+        saveFingerprintAdded(false);
+    }
+    
+    // Reset the registration state
+    currentRegistration = {
+        -1,             // No ID assigned
+        false,          // Registration not complete
+        0              // No start time
+    };
+
+    if (webSocket.connectedClients() > 0) {
+        String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
+        webSocket.broadcastTXT(resetMsg);
+    }
+    
+    resetInProgress = false;
+}
+
 
 // WebSocket event handler
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
@@ -595,231 +653,34 @@ String getFormattedTime() {
 }
 
 int getFingerprintID() {
-  User* currentUser = nullptr;
-  int fingerprintID = finger.getImage();
-  if (fingerprintID == FINGERPRINT_OK) {
-    fingerprintID = finger.image2Tz();
-    if (fingerprintID == FINGERPRINT_OK) {
-      fingerprintID = finger.fingerFastSearch();
-      if (fingerprintID == FINGERPRINT_OK) {
-        // Search for user with matching fingerprint
-        for (User &user : users) {
-          if (user.fingerprintID == String(finger.fingerID)) {
-            currentUser = &user;
-            break;
-          }
-        }
-        
-        if (currentUser) {
-          firstStepVerified = true;
-          expectedVoiceCommand = currentUser->voiceCommand;
-          
-          display.clearDisplay();
-          display.print("Say wake word");
-          display.display();
-          
-          return finger.fingerID;
-        }
-      }
-    }
-  }
-  return -1;
-}
-
-// Funkcija za unos PIN-a
-void handlePasswordInput() {
-    User* currentUser = nullptr;
-    char key = keypad.getKey();
-
-    if (key) {
-        if (!isEnteringPin) {
-            isEnteringPin = true;
-            isWaitingForMotion = false;
-            digitalWrite(ledPin, HIGH);
-            ledState = true;
-            broadcastState("led", true);
-        }
-
-        if (key == '#') {
-            for (User &user : users) {
-                if (user.pin == enteredPassword) {
-                    currentUser = &user;
-                    break;
-                }
-            }
-
-            if (currentUser) {
-                Serial.println("Correct PIN!");
-                display.clearDisplay();
-                display.setCursor(0, 0);
-                display.print("Say wake word:");
-                display.println("'probudi se' or");
-                display.println("'hello robot'");
-                display.display();
-                
-                firstStepVerified = true;
-                expectedVoiceCommand = currentUser->voiceCommand;
-                voiceAttempts = 0;
-            } else {
-                attempts++;
-                if (attempts >= maxAttempts) {
-                    Serial.println("Too many failed attempts!");
-                    digitalWrite(blueLedPin, HIGH);
-                    alarmState = true;
-                    broadcastState("alarm", true);
-                    sendTelegramMessage("Warning: Multiple failed PIN attempts detected!");
-                    delay(3000);
-                    resetPIRDetection();
-                } else {
-                    Serial.println("Incorrect PIN!");
-                    display.clearDisplay();
-                    display.setCursor(0, 0);
-                    display.print("Enter password:");
-                    display.display();
-                }
-            }
-            
-            enteredPassword = "";
-            broadcastState("pin", false);
-            
-        } else if (key == '*') {
-            if (enteredPassword.length() > 0) {
-                enteredPassword.remove(enteredPassword.length() - 1);
-                
-                DynamicJsonDocument doc(200);
-                doc["type"] = "pin";
-                doc["value"] = enteredPassword;
-                String pinMsg;
-                serializeJson(doc, pinMsg);
-                webSocket.broadcastTXT(pinMsg);
-                
-                display.clearDisplay();
-                display.setCursor(0, 0);
-                display.print("Enter password:");
-                display.setCursor(0, 20);
-                for (int i = 0; i < enteredPassword.length(); i++) {
-                    display.print("*");
-                }
-                display.display();
-            }
-        } else {
-            enteredPassword += key;
-            
-            DynamicJsonDocument doc(200);
-            doc["type"] = "pin";
-            doc["value"] = enteredPassword;
-            String pinMsg;
-            serializeJson(doc, pinMsg);
-            webSocket.broadcastTXT(pinMsg);
-            
-            display.clearDisplay();
-            display.setCursor(0, 0);
-            display.print("Enter password:");
-            display.setCursor(0, 20);
-            for (int i = 0; i < enteredPassword.length(); i++) {
-                display.print("*");
-            }
-            display.display();
-        }
-    }
-
-    // Voice command handling
-    if (firstStepVerified && currentUser) {
-        uint8_t CMDID = asr.getCMDID();
-        static bool wakeWordDetected = false;
-        
-        if (CMDID == 1 || CMDID == 2) {  // Wake word detected
-            wakeWordDetected = true;
-            Serial.println("Wake word detected!");
-            display.clearDisplay();
-            display.setCursor(0, 0);
-            display.print("Say your command");
-            display.display();
-        } 
-        else if (wakeWordDetected && CMDID != 0) {
-            if (CMDID == expectedVoiceCommand.toInt()) {
-                Serial.println("Voice command verified!");
-                displayWelcomeMessage(currentUser->username);  // Show welcome message
-                moveServo();  // Open and close door
-                delay(1000);  // Short delay
-                firstStepVerified = false;
-                wakeWordDetected = false;
-                resetPIRDetection();
-            } else {
-                voiceAttempts++;
-                if (voiceAttempts >= maxVoiceAttempts) {
-                    Serial.println("Too many failed voice attempts!");
-                    digitalWrite(blueLedPin, HIGH);
-                    alarmState = true;
-                    broadcastState("alarm", true);
-                    sendTelegramMessage("Warning: Multiple failed voice command attempts detected!");
-                    firstStepVerified = false;
-                    wakeWordDetected = false;
-                    resetPIRDetection();
-                } else {
-                    display.clearDisplay();
-                    display.setCursor(0, 0);
-                    display.print("Wrong command. Try again");
-                    display.println("Attempts left: " + String(maxVoiceAttempts - voiceAttempts));
-                    display.display();
-                    delay(2000);
-                    display.clearDisplay();
-                    display.print("Say wake word");
-                    display.display();
-                    wakeWordDetected = false;
+    if (!firstStepVerified) {
+        int fingerprintID = finger.getImage();
+        if (fingerprintID == FINGERPRINT_OK) {
+            fingerprintID = finger.image2Tz();
+            if (fingerprintID == FINGERPRINT_OK) {
+                fingerprintID = finger.fingerFastSearch();
+                if (fingerprintID == FINGERPRINT_OK) {
+                    for (User &user : users) {
+                        if (user.fingerprintID == String(finger.fingerID)) {
+                            authenticatedUser = &user;
+                            firstStepVerified = true;
+                            expectedVoiceCommand = user.voiceCommand;
+                            
+                            display.clearDisplay();
+                            display.setCursor(0, 0);
+                            display.println("Say wake word:");
+                            display.println("'hello robot'");
+                            display.display();
+                            
+                            return finger.fingerID;
+                        }
+                    }
                 }
             }
         }
+        return -1;
     }
-}
-
-
-void handlePIRSensor() {
-    int pirState = digitalRead(pirPin);
-    unsigned long currentTime = millis();
-
-    if (pirState != lastPirState) {
-        lastPirReadTime = currentTime;
-    }
-
-    if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
-        Serial.println("Motion detected!");
-        String detectionTime = getFormattedTime();
-        motionDetectedTime = detectionTime;
-        pirActivationTime = millis();
-        ledTurnOnTime = millis();
-
-        // Turn on LED and update states
-        digitalWrite(ledPin, HIGH);
-        ledState = true;
-        motionState = true;
-
-        // Broadcast LED state update
-        broadcastState("led", ledState);
-        Serial.println("LED state broadcast: ON");
-
-        // Broadcast motion state update
-        broadcastState("motion", motionState, detectionTime.c_str());
-        Serial.println("Motion state broadcast: DETECTED");
-
-        // Update OLED display
-        display.clearDisplay();
-        display.setCursor(0, 0);
-        display.print("Motion at:");
-        display.setCursor(0, 20);
-        display.print(detectionTime);
-        display.display();
-
-        isEnteringPin = true;
-        isWaitingForMotion = false;
-    }
-
-    if (ledState && (currentTime - ledTurnOnTime > ledOnTimeout)) {
-        Serial.println("3 minutes passed, turning LED off.");
-        resetPIRDetection();
-    }
-
-    lastPirState = pirState;
+    return -1;
 }
 
 void resetPIRDetection() {
@@ -874,30 +735,187 @@ void resetPIRDetection() {
     Serial.println("All states reset and broadcast");
 }
 
+// Funkcija koja prikazuje poruku "Welcome home (ime korisnika)" na OLED-u
+void displayWelcomeMessage(String username) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    
+    // Display "Welcome"
+    display.setCursor((SCREEN_WIDTH - 7 * 6) / 2, 10);  // Center "Welcome"
+    display.print("Welcome");
+    
+    // Display "home"
+    display.setCursor((SCREEN_WIDTH - 4 * 6) / 2, 25);  // Center "home"
+    display.print("home");
+    
+    // Display username
+    display.setCursor((SCREEN_WIDTH - username.length() * 6) / 2, 40);  // Center username
+    display.print(username);
+    
+    display.display();
+}
+
+
 void moveServo() {
     Serial.println("Moving servo - Opening door");
     doorState = true;
-    
-    // Broadcast door opening
     broadcastState("doors", doorState);
-
+    
+    // Open door
     for (pos = 0; pos <= 180; pos += 1) {
         myservo.write(pos);
-        delay(10);
     }
-    delay(1000);
+    
+    // Keep door open briefly
+    delay(2000);
+    
+    // Close door
     for (pos = 180; pos >= 0; pos -= 1) {
         myservo.write(pos);
-        delay(10);
+    }
+    
+    doorState = false;
+    broadcastState("doors", doorState);
+    Serial.println("Door movement complete");
+}
+
+
+// Funkcija za unos PIN-a
+void handlePasswordInput() {
+    char key = keypad.getKey();
+
+    if (key && !firstStepVerified) {
+        if (!isEnteringPin) {
+            isEnteringPin = true;
+            isWaitingForMotion = false;
+            digitalWrite(ledPin, HIGH);
+            ledState = true;
+            broadcastState("led", true);
+        }
+
+        if (key == '#') {
+            for (User &user : users) {
+                if (user.pin == enteredPassword) {
+                    authenticatedUser = &user;
+                    firstStepVerified = true;
+                    expectedVoiceCommand = user.voiceCommand;
+                    
+                    Serial.println("Correct PIN!");
+                    
+                    display.clearDisplay();
+                    display.setCursor(0, 0);
+                    display.println("Say wake word:");
+                    display.println("'hello robot'");
+                    display.display();
+                    
+                    enteredPassword = "";
+                    updatePINState("");
+                    return;
+                }
+            }
+
+            attempts++;
+            if (attempts >= maxAttempts) {
+                Serial.println("Too many failed attempts!");
+                digitalWrite(blueLedPin, HIGH);
+                alarmState = true;
+                broadcastState("alarm", true);
+                sendTelegramMessage("Warning: Multiple failed PIN attempts detected!");
+                delay(3000);
+                resetPIRDetection();
+            } else {
+                Serial.println("Incorrect PIN!");
+                display.clearDisplay();
+                display.setCursor(0, 0);
+                display.print("Wrong PIN!");
+                display.setCursor(0, 20);
+                display.printf("Attempts left: %d", maxAttempts - attempts);
+                display.display();
+                delay(2000);
+                
+                display.clearDisplay();
+                display.setCursor(0, 0);
+                display.print("Enter PIN:");
+                display.display();
+            }
+            
+            enteredPassword = "";
+            updatePINState("");
+            
+        } else if (key == '*') {
+            if (enteredPassword.length() > 0) {
+                enteredPassword.remove(enteredPassword.length() - 1);
+                updatePINState(enteredPassword);
+                
+                display.clearDisplay();
+                display.setCursor(0, 0);
+                display.print("Enter PIN:");
+                display.setCursor(0, 20);
+                for (int i = 0; i < enteredPassword.length(); i++) {
+                    display.print("*");
+                }
+                display.display();
+            }
+        } else {
+            enteredPassword += key;
+            updatePINState(enteredPassword);
+            
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.print("Enter PIN:");
+            display.setCursor(0, 20);
+            for (int i = 0; i < enteredPassword.length(); i++) {
+                display.print("*");
+            }
+            display.display();
+        }
+    }
+}
+
+void handlePIRSensor() {
+    int pirState = digitalRead(pirPin);
+    unsigned long currentTime = millis();
+
+    if (pirState != lastPirState) {
+        lastPirReadTime = currentTime;
     }
 
-    doorState = false;
-    
-    // Broadcast door closing
-    broadcastState("doors", doorState);
-    
-    Serial.println("Door closed");
+    if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
+        Serial.println("Motion detected!");
+        String detectionTime = getFormattedTime();
+        motionDetectedTime = detectionTime;
+        pirActivationTime = millis();
+        ledTurnOnTime = millis();
+
+        digitalWrite(ledPin, HIGH);
+        ledState = true;
+        motionState = true;
+
+        broadcastState("led", ledState);
+        broadcastState("motion", motionState, detectionTime.c_str());
+
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.println("Motion detected!");
+        display.println("Use PIN or");
+        display.println("Fingerprint");
+        display.display();
+
+        isEnteringPin = true;
+        isWaitingForMotion = false;
+        firstStepVerified = false;
+        authenticatedUser = nullptr;
+    }
+
+    if (ledState && (currentTime - ledTurnOnTime > ledOnTimeout)) {
+        resetPIRDetection();
+    }
+
+    lastPirState = pirState;
 }
+
+
+
 
 void activateErrorLED() {
     digitalWrite(blueLedPin, HIGH);
@@ -916,23 +934,6 @@ void activateErrorLED() {
     broadcastState("alarm", alarmState);
 }
 
-
-// Funkcija koja prikazuje poruku "Welcome home (ime korisnika)" na OLED-u
-void displayWelcomeMessage(String username) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor((SCREEN_WIDTH - 6 * 7) / 2, 10);  // Center "Welcome"
-    display.print("Welcome");
-    
-    display.setCursor((SCREEN_WIDTH - 6 * 5) / 2, 25);  // Center "home!"
-    display.print("home!");
-    
-    display.setCursor((SCREEN_WIDTH - 6 * username.length()) / 2, 40);  // Center username
-    display.print(username);
-    
-    display.display();
-    delay(2000);  // Show message for 2 seconds
-}
 
 
 // Generiše novi ID ako nije zauzet
@@ -992,44 +993,6 @@ bool isIDInUse(int id) {
     return false;
 }
 
-void resetRegistrationProcess() {
-    static bool resetInProgress = false;
-    if (resetInProgress) return; // Prevent duplicate resets
-    resetInProgress = true;
-
-    Serial.println("Resetting registration process");
-    
-    // If we had an ID assigned but registration wasn't completed, release it
-    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
-        Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
-        finger.deleteModel(currentRegistration.assignedID);
-        currentRegistration.assignedID = -1;
-    }
-    
-    registrationActive = false;
-    currentStep = 0;
-    idAssigned = false;
-    isAssigningId = false;
-    fingerprintAdded = false;
-    
-    if (!fingerprintAdded) {
-        saveFingerprintAdded(false);
-    }
-    
-    // Reset the registration state
-    currentRegistration = {
-        -1,             // No ID assigned
-        false,          // Registration not complete
-        0              // No start time
-    };
-
-    if (webSocket.connectedClients() > 0) {
-        String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
-        webSocket.broadcastTXT(resetMsg);
-    }
-    
-    resetInProgress = false;
-}
 
 
 void assignFingerprintID() {
@@ -1300,17 +1263,6 @@ bool getFingerprintAdded() {
 }
 
 
-// Čuvanje otiska u memoriju
-void saveFingerprintAdded(bool status) {
-    File file = SPIFFS.open("/fingerprintAdded.txt", FILE_WRITE);
-    if (!file) {
-        Serial.println("Failed to open file for writing");
-        return;
-    }
-    file.print(status ? "true" : "false");
-    file.close();
-    Serial.println("Saved fingerprintAdded to SPIFFS");
-}
 
 bool saveFingerprint() {
     int p = finger.storeModel(fingerprintID);
@@ -1944,10 +1896,10 @@ void showAddUserPage() {
                       <option value="5">otvori se</option>
                       <option value="6">otključaj</option> 
                       <option value="7">zatvori</option>
-                      <option value="47">forget</option>
                       <option value="82">reset</option>
                       <option value="130">auto mode</option>
                       <option value="141">open the door</option>
+                      <option value="142">close the door</option>
                   </select>
                 <div id="voice-command-error" class="error-message"></div>
 
@@ -2983,22 +2935,56 @@ void handleLogout() {
   showMainPage();
 }
 
+void checkDebugStatus() {
+    Serial.println("\n=== Debug Status Check ===");
+    Serial.printf("DEBUG_REGISTRATION: %s\n", DEBUG_REGISTRATION ? "true" : "false");
+    Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
+    Serial.printf("currentStep: %d\n", currentStep);
+    Serial.printf("Time since last debug: %lu ms\n", millis() - lastRegistrationDebug);
+}
+
+void handleRegistrationDebug() {
+    if (registrationActive) {
+        logRegistrationStatus("State Change Check");
+    }
+}
+
+void scanI2CBuses() {
+    Serial.println("\nScanning primary I2C bus (Wire)...");
+    for(byte address = 1; address < 127; address++) {
+        Wire.beginTransmission(address);
+        byte error = Wire.endTransmission();
+        if (error == 0) {
+            Serial.printf("Device found on Wire at address 0x%02X\n", address);
+        }
+    }
+    
+    Serial.println("\nScanning secondary I2C bus (Wire1)...");
+    for(byte address = 1; address < 127; address++) {
+        Wire1.beginTransmission(address);
+        byte error = Wire1.endTransmission();
+        if (error == 0) {
+            Serial.printf("Device found on Wire1 at address 0x%02X\n", address);
+        }
+    }
+}
+
 
 void setup() {
     Serial.begin(115200);
     randomSeed(analogRead(0));
-    Wire.begin(21, 22);
-    Wire.setClock(50000);  // Slower speed for better stability
 
-     
     
-    Serial.println("I2C Scanner");
-    for(byte address = 1; address < 127; address++) {
-      Wire.beginTransmission(address);
-      if (Wire.endTransmission() == 0) {
-        Serial.printf("Device found at address 0x%02X\n", address);
-      }
-    }
+    // Initialize primary I2C bus for OLED
+    Wire.begin(OLED_SDA, OLED_SCL);
+    Wire.setClock(400000);  // 400kHz for OLED
+    
+    // Initialize secondary I2C bus for voice sensor
+    Wire1.begin(VOICE_SDA, VOICE_SCL);
+    Wire1.setClock(100000);  // 100kHz for voice sensor
+    
+    // Debug I2C devices
+    scanI2CBuses();
     
     mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
     finger.begin(57600);
@@ -3022,10 +3008,10 @@ void setup() {
     pinMode(blueLedPin, OUTPUT);
     pinMode(pirPin, INPUT);
 
-    // OLED Setup
+     // Initialize OLED (using default Wire bus)
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-        Serial.println(F("OLED nije pronađen"));
-        for (;;);
+        Serial.println(F("OLED failed to initialize"));
+        for(;;);
     }
 
     display.clearDisplay();
@@ -3054,22 +3040,23 @@ void setup() {
     initializeRegistrationState();
     cleanupOrphanedFingerprints();
 
+  // Initialize voice sensor (using Wire1)
     if (!asr.begin()) {
-        Serial.println("Communication failed, check connection");
+        Serial.println("Voice sensor failed to initialize");
         delay(3000);
+    } else {
+        Serial.println("Voice sensor initialized successfully!");
+        
+        // Configure voice sensor
+        asr.setVolume(7);
+        asr.setMuteMode(0);
+        asr.setWakeTime(20);
+        
+        // Verify settings
+        delay(100);
+        uint8_t wakeTime = asr.getWakeTime();
+        Serial.printf("Wake Time set to: %d\n", wakeTime);
     }
-    Serial.println("Voice sensor initialization successful!");
-    
-    asr.setVolume(7);  // Set volume
-    asr.setMuteMode(0);  // Sound mode (0: enabled, 1: disabled) 
-    asr.setWakeTime(20);  // Set wake duration
-
-      uint8_t wakeTime = asr.getWakeTime();
-      Serial.print("wakeTime = ");
-      Serial.println(wakeTime);
-    
-      Serial.println("Sistem spreman za prepoznavanje govora.");
-
 
     Serial.print("WebSocket server running on: ws://");
   Serial.print(WiFi.localIP());
@@ -3171,6 +3158,14 @@ void setup() {
     myservo.setPeriodHertz(50);
     myservo.attach(servoPin, 1000, 2000);
 
+        Serial.println("Testing servo...");
+    myservo.write(0);   // Move to start position
+    delay(1000);
+    myservo.write(180); // Test full movement
+    delay(1000);
+    myservo.write(0);   // Return to start
+    Serial.println("Servo test complete");
+
     // Fingerprint Sensor Setup
     if (finger.verifyPassword()) {
         Serial.println("Found fingerprint sensor!");
@@ -3194,17 +3189,30 @@ void setup() {
     Serial.println("\n=== System Setup Complete ===");
 }
 
-void checkDebugStatus() {
-    Serial.println("\n=== Debug Status Check ===");
-    Serial.printf("DEBUG_REGISTRATION: %s\n", DEBUG_REGISTRATION ? "true" : "false");
-    Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
-    Serial.printf("currentStep: %d\n", currentStep);
-    Serial.printf("Time since last debug: %lu ms\n", millis() - lastRegistrationDebug);
-}
-
-void handleRegistrationDebug() {
-    if (registrationActive) {
-        logRegistrationStatus("State Change Check");
+void testVoiceSensor() {
+    static unsigned long lastCheck = 0;
+    
+    if (millis() - lastCheck > 100) {  // Check every 100ms
+        uint8_t CMDID = asr.getCMDID();
+        if (CMDID != 0) {
+            Serial.println("\nVoice Command Test:");
+            Serial.printf("Command ID received: %d\n", CMDID);
+            
+            switch(CMDID) {
+                case 1:
+                    Serial.println("Wake word 'probudi se' detected");
+                    break;
+                case 2:
+                    Serial.println("Wake word 'hello robot' detected");
+                    break;
+                case 5:
+                    Serial.println("Command 'otvori se' detected");
+                    break;
+                default:
+                    Serial.printf("Unknown command ID: %d\n", CMDID);
+            }
+        }
+        lastCheck = millis();
     }
 }
 
@@ -3217,7 +3225,8 @@ void loop() {
     server.handleClient();
     handleRegistrationDebug();
     webSocket.loop();
-
+    //testVoiceSensor();
+    
     // Enhanced debug section for registration process
     if (DEBUG_REGISTRATION) {
         if (registrationActive) {
@@ -3256,7 +3265,142 @@ void loop() {
 
     // PIR Sensor and Password Input handling
     handlePIRSensor();
-    handlePasswordInput();
+    if (!firstStepVerified) {
+        handlePasswordInput();
+        getFingerprintID();
+    }
+    
+    // Handle voice commands and password input
+  if (firstStepVerified && authenticatedUser != nullptr) {
+        uint8_t CMDID = asr.getCMDID();
+        static bool wakeWordDetected = false;
+        
+        if (CMDID != 0) {
+            Serial.printf("\nCommand received - CMDID: %d\n", CMDID);
+            Serial.printf("Wake Word State: %s\n", wakeWordDetected ? "Active" : "Inactive");
+            Serial.printf("Expected Command: %s\n", expectedVoiceCommand.c_str());
+        }
+        
+        // Handle wake word detection
+        if (CMDID == 2) {  // "hello robot"
+            Serial.println("Wake word detected!");
+            wakeWordDetected = true;
+            
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.println("Wake word OK!");
+            display.println("Say your command:");
+            display.display();
+            delay(500);
+        }
+        // Handle voice commands after wake word
+        else if (wakeWordDetected && CMDID != 0) {
+            bool validCommand = false;
+            
+            // Check if the received command matches the expected command
+            if (CMDID == expectedVoiceCommand.toInt()) {
+                validCommand = true;
+            }
+            // Additional command handling based on CMDID
+            switch(CMDID) {
+                case 5:  // "otvori se"
+                    if (validCommand) {
+                        Serial.println("Otvori se command received!");
+                        display.clearDisplay();
+                        displayWelcomeMessage(authenticatedUser->username);
+                        moveServo();
+                    }
+                    break;
+                    
+                case 6:  // "otkljucaj"
+                    if (validCommand) {
+                        Serial.println("Otkljucaj command received!");
+                        display.clearDisplay();
+                        displayWelcomeMessage(authenticatedUser->username);
+                        moveServo();
+                    }
+                    break;
+             
+                case 141: // "open the door"
+                    if (validCommand) {
+                        Serial.println("Open the door opening command received!");
+                        display.clearDisplay();
+                        displayWelcomeMessage(authenticatedUser->username);
+                        moveServo();
+                    }
+                    break;
+                    
+                case 7:   // "zatvori"
+                    if (validCommand) {
+                        Serial.println("Zatvori command received!");
+                        display.clearDisplay();
+                        displayWelcomeMessage(authenticatedUser->username);
+                        moveServo();
+                    }
+                    break;
+                    
+                case 142:  // "close the door"
+                    if (validCommand) {
+                        Serial.println("Close the door command received!");
+                        display.clearDisplay();
+                        displayWelcomeMessage(authenticatedUser->username);
+                        moveServo();
+                    }
+                    break;
+                    
+                case 82:  // "reset"
+                    if (validCommand) {
+                        Serial.println("Reset command received!");
+                        display.clearDisplay();
+                        displayWelcomeMessage(authenticatedUser->username);
+                        moveServo();
+                    }
+                    break;
+                    
+                case 130: // "auto mode"
+                    if (validCommand) {
+                        Serial.println("Auto mode command received!");
+                        display.clearDisplay();
+                        displayWelcomeMessage(authenticatedUser->username);
+                        moveServo();
+                    }
+                    break;
+                    
+                default:
+                    Serial.println("Unrecognized command");
+                    validCommand = false;
+                    break;
+            }
+            
+            if (validCommand) {
+                // Reset states after successful command
+                firstStepVerified = false;
+                authenticatedUser = nullptr;
+                wakeWordDetected = false;
+                voiceAttempts = 0;
+                resetPIRDetection();
+            } else {
+                Serial.printf("Wrong command! Got %d, expected %s\n", CMDID, expectedVoiceCommand.c_str());
+                voiceAttempts++;
+                
+                if (voiceAttempts >= maxVoiceAttempts) {
+                    Serial.println("Too many failed voice command attempts!");
+                    digitalWrite(blueLedPin, HIGH);
+                    alarmState = true;
+                    broadcastState("alarm", true);
+                    sendTelegramMessage("Warning: Multiple failed voice command attempts detected!");
+                    
+                    // Reset all states
+                    firstStepVerified = false;
+                    authenticatedUser = nullptr;
+                    wakeWordDetected = false;
+                    voiceAttempts = 0;
+                    resetPIRDetection();
+                }
+            }
+        }
+    }
+    
     checkRegistrationTimeout();
 
 
