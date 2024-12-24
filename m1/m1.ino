@@ -1535,20 +1535,24 @@ void printUsersFile() {
 
 // Funkcija za prikaz glavnog prozora sa dugmadima
 void showMainPage() {
-  server.send(200, "text/html",
-              "<html><head>"
-              "<style>"
-              "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; height: 100vh; margin: 0; display: flex; justify-content: center; align-items: center; }"
-              ".main-container { display: flex; justify-content: center; align-items: center; flex-direction: column; }"
-              ".main-container button { background-color: #00d4ff; color: #ffffff; padding: 20px 40px; margin: 20px; border-radius: 10px; font-size: 20px; border: none; cursor: pointer; width: 300px; }"
-              ".main-container button:hover { background-color: #00a3cc; }"
-              "</style>"
-              "</head><body>"
-              "<div class='main-container'>"
-              "<button onclick=\"location.href='/loginPage'\">Login</button>"
-              "<button onclick=\"location.href='/addUserPage'\">Add User</button>"
-              "</div>"
-              "</body></html>");
+  String page = R"rawliteral(
+    <html><head>
+    <style>
+    body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; height: 100vh; margin: 0; display: flex; justify-content: center; align-items: center; }
+    .main-container { display: flex; justify-content: center; align-items: center; flex-direction: column; }
+    .main-container button { background-color: #00d4ff; color: #ffffff; padding: 20px 40px; margin: 20px; border-radius: 10px; font-size: 20px; border: none; cursor: pointer; width: 300px; }
+    .main-container button:hover { background-color: #00a3cc; }
+    </style>
+    </head>
+    <body>
+    <div class='main-container'>
+      <button onclick="location.href='/loginPage'">Login</button>
+      <button onclick="location.href='/addUserPage'">Add User</button>
+    </div>
+    </body></html>
+    )rawliteral";
+
+  server.send(200, "text/html", page);
 }
 
 
@@ -1619,152 +1623,153 @@ void showUserPage() {
   server.sendHeader("Pragma", "no-cache");
   server.sendHeader("Expires", "-1");
 
-  String page = F("<html><head><style>"
-    "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; height: 100vh; margin: 0; position: relative; }"
-    ".wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }"
-    ".bulb { position: absolute; top: calc(40vh + 80px); left: 50%; transform: translate(-50%, -20px); width: 80px; height: 80px; background: #444; border-radius: 50%; z-index: 2; }"
-    ".bulb:before { content: ''; position: absolute; left: 22.5px; top: -50px; width: 35px; height: 80px; background: #444; border-top: 30px solid #000; border-radius: 10px; }"
-    "body.on .bulb::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; background: #fff; border-radius: 50%; filter: blur(40px); }"
-    "body.on .bulb { background-color: #fff; box-shadow: 0 0 50px #fff, 0 0 100px #fff, 0 0 150px #fff, 0 0 200px #fff, 0 0 250px #fff, 0 0 300px #fff, 0 0 350px #fff; }"
-    "body.on .bulb::before { background: #fff; }"
-    ".pin-keypad-container { display: flex; flex-direction: column; align-items: flex-start; position: absolute; left: 100px; top: 150px; }"
-    ".screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; margin-bottom: 10px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; flex-direction: column; justify-content: center; }"
-    ".pin-display { font-size: 22px; margin-top: 5px; }"
-    ".keypad { display: grid; grid-template-columns: repeat(4, 61px); grid-gap: 8px; margin-top: 10px; }"
-    ".key { background-color: #00d4ff; color: white; padding: 19px; font-size: 20px; border-radius: 8px; cursor: pointer; text-align: center; }"
-    ".key:hover { background-color: #00a3cc; }"
-    ".right-panel { position: absolute; top: 200px; right: 100px; display: flex; flex-direction: column; gap: 30px; }"
-    ".status-box { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; align-items: center; justify-content: center; }"
-    ".status-box.alarm-box.alarm-active { background-color: red; }"
-    ".status-box.door-box.opened { background-color: green; }"
-    ".logout-button { background-color: #00d4ff; color: white; padding: 15px; font-size: 18px; border-radius: 15px; cursor: pointer; position: absolute; top: 20px; right: 20px; }"
-    ".logout-button:hover { background-color: #00a3cc; }"
-    "</style></head><body>"
-    "<div class='wire'></div>"
-    "<div class='bulb' id='ledCircle'></div>"
-    "<div class='pin-keypad-container'>"
-    "<div class='screen'>Entered PIN:<div class='pin-display' id='pin-display'></div></div>"
-    "<div class='keypad'>"
-    "<div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>"
-    "<div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>"
-    "<div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>"
-    "<div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>"
-    "</div></div>"
-    "<div class='right-panel'>"
-    "<div class='status-box motion-box' id='motion-box'>Waiting for motion...</div>"
-    "<div class='status-box alarm-box' id='alarm-box'>No Alarm</div>"
-    "<div class='status-box door-box' id='doors-box'>Closed</div>"
-    "</div>"
-    "<a href='/logout'><button class='logout-button'>Logout</button></a>"
-// Replace this part in showUserPage function
-"<script>"
-"let ws = null;"
-"let reconnectInterval = null;"
+  String page = R"rawliteral(
+<html><head><style>
+  body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; height: 100vh; margin: 0; position: relative; }
+  .wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }
+  .bulb { position: absolute; top: calc(40vh + 80px); left: 50%; transform: translate(-50%, -20px); width: 80px; height: 80px; background: #444; border-radius: 50%; z-index: 2; }
+  .bulb:before { content: ''; position: absolute; left: 22.5px; top: -50px; width: 35px; height: 80px; background: #444; border-top: 30px solid #000; border-radius: 10px; }
+  body.on .bulb::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 120px; height: 120px; background: #fff; border-radius: 50%; filter: blur(40px); }
+  body.on .bulb { background-color: #fff; box-shadow: 0 0 50px #fff, 0 0 100px #fff, 0 0 150px #fff, 0 0 200px #fff, 0 0 250px #fff, 0 0 300px #fff, 0 0 350px #fff; }
+  body.on .bulb::before { background: #fff; }
+  .pin-keypad-container { display: flex; flex-direction: column; align-items: flex-start; position: absolute; left: 100px; top: 150px; }
+  .screen { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; margin-bottom: 10px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; flex-direction: column; justify-content: center; }
+  .pin-display { font-size: 22px; margin-top: 5px; }
+  .keypad { display: grid; grid-template-columns: repeat(4, 61px); grid-gap: 8px; margin-top: 10px; }
+  .key { background-color: #00d4ff; color: white; padding: 19px; font-size: 20px; border-radius: 8px; cursor: pointer; text-align: center; }
+  .key:hover { background-color: #00a3cc; }
+  .right-panel { position: absolute; top: 200px; right: 100px; display: flex; flex-direction: column; gap: 30px; }
+  .status-box { background-color: #1A4D8A; color: white; padding: 10px; font-size: 18px; width: 250px; text-align: center; border-radius: 10px; height: 55px; display: flex; align-items: center; justify-content: center; }
+  .status-box.alarm-box.alarm-active { background-color: red; }
+  .status-box.door-box.opened { background-color: green; }
+  .logout-button { background-color: #00d4ff; color: white; padding: 15px; font-size: 18px; border-radius: 15px; cursor: pointer; position: absolute; top: 20px; right: 20px; }
+  .logout-button:hover { background-color: #00a3cc; }
+</style></head>
+<body>
+  <div class='wire'></div>
+  <div class='bulb' id='ledCircle'></div>
+  <div class='pin-keypad-container'>
+    <div class='screen'>Entered PIN:<div class='pin-display' id='pin-display'></div></div>
+    <div class='keypad'>
+      <div class='key'>1</div><div class='key'>2</div><div class='key'>3</div><div class='key'>A</div>
+      <div class='key'>4</div><div class='key'>5</div><div class='key'>6</div><div class='key'>B</div>
+      <div class='key'>7</div><div class='key'>8</div><div class='key'>9</div><div class='key'>C</div>
+      <div class='key'>*</div><div class='key'>0</div><div class='key'>#</div><div class='key'>D</div>
+    </div>
+  </div>
+  <div class='right-panel'>
+    <div class='status-box motion-box' id='motion-box'>Waiting for motion...</div>
+    <div class='status-box alarm-box' id='alarm-box'>No Alarm</div>
+    <div class='status-box door-box' id='doors-box'>Closed</div>
+  </div>
+  <a href='/logout'><button class='logout-button'>Logout</button></a>
+  <script>
+    let ws = null;
+    let reconnectInterval = null;
 
-"async function resolveServerIP() {"
-"    try {"
-"        const response = await fetch('/ws-info');"
-"        const serverInfo = await response.text();"
-"        const ipMatch = serverInfo.match(/Server IP: ([\\d\\.]+)/);"
-"        if (ipMatch && ipMatch[1]) return ipMatch[1];"
-"        return window.location.hostname;"
-"    } catch (error) {"
-"        console.error('Failed to resolve server IP:', error);"
-"        return window.location.hostname;"
-"    }"
-"}"
+    async function resolveServerIP() {
+        try {
+            const response = await fetch('/ws-info');
+            const serverInfo = await response.text();
+            const ipMatch = serverInfo.match(/Server IP: ([\d\.]+)/);
+            if (ipMatch && ipMatch[1]) return ipMatch[1];
+            return window.location.hostname;
+        } catch (error) {
+            console.error('Failed to resolve server IP:', error);
+            return window.location.hostname;
+        }
+    }
 
-"async function connectWebSocket() {"
-"    if (ws) {"
-"        ws.close();"
-"    }"
+    async function connectWebSocket() {
+        if (ws) {
+            ws.close();
+        }
 
-"    const serverIP = await resolveServerIP();"
-"    const wsUrl = `ws://${serverIP}:81`;"
-"    console.log('Connecting to WebSocket at:', wsUrl);"
-    
-"    ws = new WebSocket(wsUrl);"
+        const serverIP = await resolveServerIP();
+        const wsUrl = `ws://${serverIP}:81`;
+        console.log('Connecting to WebSocket at:', wsUrl);
+        
+        ws = new WebSocket(wsUrl);
 
-"    ws.onopen = function() {"
-"        console.log('WebSocket Connected');"
-"        clearInterval(reconnectInterval);"
-"        ws.send('getStates');"
-"    };"
+        ws.onopen = function() {
+            console.log('WebSocket Connected');
+            clearInterval(reconnectInterval);
+            ws.send('getStates');
+        };
 
-"    ws.onclose = function() {"
-"        console.log('WebSocket Disconnected');"
-"        if (!reconnectInterval) {"
-"            reconnectInterval = setInterval(connectWebSocket, 3000);"
-"        }"
-"    };"
+        ws.onclose = function() {
+            console.log('WebSocket Disconnected');
+            if (!reconnectInterval) {
+                reconnectInterval = setInterval(connectWebSocket, 3000);
+            }
+        };
 
-"    ws.onerror = function(error) {"
-"        console.error('WebSocket Error:', error);"
-"    };"
+        ws.onerror = function(error) {
+            console.error('WebSocket Error:', error);
+        };
 
-"    ws.onmessage = function(event) {"
-"        console.log('Received:', event.data);"
-"        try {"
-"            const data = JSON.parse(event.data);"
-"            switch(data.type) {"
-"                case 'led':"
-"                    if (data.state) {"
-"                        document.body.classList.add('on');"
-"                    } else {"
-"                        document.body.classList.remove('on');"
-"                    }"
-"                    break;"
-"                case 'motion':"
-"                    const motionBox = document.getElementById('motion-box');"
-"                    if (motionBox) {"
-"                        motionBox.innerText = data.state ? 'Motion detected at ' + data.time : 'Waiting for motion...';"
-"                        motionBox.style.backgroundColor = data.state ? '#4CAF50' : '#1A4D8A';"
-"                    }"
-"                    break;"
-"                case 'pin':"
-"                    const pinDisplay = document.getElementById('pin-display');"
-"                    if (pinDisplay) {"
-"                        pinDisplay.innerText = data.value ? '*'.repeat(data.value.length) : '';"
-"                    }"
-"                    break;"
-"                case 'alarm':"
-"                    const alarmBox = document.getElementById('alarm-box');"
-"                    if (alarmBox) {"
-"                        alarmBox.innerText = data.state ? 'ALARM' : 'No Alarm';"
-"                        alarmBox.style.backgroundColor = data.state ? '#ff0000' : '#1A4D8A';"
-"                    }"
-"                    break;"
-"                case 'doors':"
-"                    const doorBox = document.getElementById('doors-box');"
-"                    if (doorBox) {"
-"                        doorBox.innerText = data.state ? 'Door Open' : 'Door Closed';"
-"                        doorBox.style.backgroundColor = data.state ? '#4CAF50' : '#1A4D8A';"
-"                    }"
-"                    break;"
-"            }"
-"        } catch (error) {"
-"            console.error('Error processing message:', error);"
-"        }"
-"    };"
-"}"
+        ws.onmessage = function(event) {
+            console.log('Received:', event.data);
+            try {
+                const data = JSON.parse(event.data);
+                switch(data.type) {
+                    case 'led':
+                        if (data.state) {
+                            document.body.classList.add('on');
+                        } else {
+                            document.body.classList.remove('on');
+                        }
+                        break;
+                    case 'motion':
+                        const motionBox = document.getElementById('motion-box');
+                        if (motionBox) {
+                            motionBox.innerText = data.state ? 'Motion detected at ' + data.time : 'Waiting for motion...';
+                            motionBox.style.backgroundColor = data.state ? '#4CAF50' : '#1A4D8A';
+                        }
+                        break;
+                    case 'pin':
+                        const pinDisplay = document.getElementById('pin-display');
+                        if (pinDisplay) {
+                            pinDisplay.innerText = data.value ? '*'.repeat(data.value.length) : '';
+                        }
+                        break;
+                    case 'alarm':
+                        const alarmBox = document.getElementById('alarm-box');
+                        if (alarmBox) {
+                            alarmBox.innerText = data.state ? 'ALARM' : 'No Alarm';
+                            alarmBox.style.backgroundColor = data.state ? '#ff0000' : '#1A4D8A';
+                        }
+                        break;
+                    case 'doors':
+                        const doorBox = document.getElementById('doors-box');
+                        if (doorBox) {
+                            doorBox.innerText = data.state ? 'Door Open' : 'Door Closed';
+                            doorBox.style.backgroundColor = data.state ? '#4CAF50' : '#1A4D8A';
+                        }
+                        break;
+                }
+            } catch (error) {
+                console.error('Error processing message:', error);
+            }
+        };
+    }
 
-// Initialize connection when page loads
-"window.addEventListener('load', connectWebSocket);"
+    window.addEventListener('load', connectWebSocket);
 
-// Cleanup on page unload
-"window.addEventListener('beforeunload', function() {"
-"    if (ws) {"
-"        ws.close();"
-"    }"
-"    if (reconnectInterval) {"
-"        clearInterval(reconnectInterval);"
-"    }"
-"});"
-"</script></body></html>");
+    window.addEventListener('beforeunload', function() {
+        if (ws) {
+            ws.close();
+        }
+        if (reconnectInterval) {
+            clearInterval(reconnectInterval);
+        }
+    });
+  </script>
+</body></html>
+)rawliteral";
 
   server.send(200, "text/html", page);
 }
-
 
 
 
@@ -1788,6 +1793,8 @@ void showAddUserPage() {
 <!DOCTYPE html>
 <html>
 <head>
+ <meta charset="UTF-8">                                         
+ <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"> 
     <style>
         body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }
         .login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }
@@ -1927,663 +1934,663 @@ void showAddUserPage() {
     </div>
 
     <script>
-let ws;
-let registrationInProgress = false;
-let debugMode = true;
-let fingerprintAdded = false;
-
-setInterval(() => {
-    if (ws) {
-        console.log('WebSocket state:', {
-            readyState: ws.readyState,
-            bufferedAmount: ws.bufferedAmount,
-            protocol: ws.protocol,
-            url: ws.url
-        });
-    }
-}, 5000);
-
-let wsStatusInterval = setInterval(() => {
-    if (ws) {
-        const states = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
-        console.log('WebSocket status:', {
-            state: states[ws.readyState],
-            readyState: ws.readyState,
-            url: ws.url
-        });
-    }
-}, 3000);
-
-async function resolveServerIP() {
-    try {
-        // Make a request to get server info
-        const response = await fetch('/ws-info');
-        const serverInfo = await response.text();
-        
-        // Extract IP from the server info
-        const ipMatch = serverInfo.match(/Server IP: ([\d\.]+)/);
-        if (ipMatch && ipMatch[1]) {
-            console.log('Resolved server IP:', ipMatch[1]);
-            return ipMatch[1];
-        }
-        throw new Error('Could not extract IP from server info');
-    } catch (error) {
-        console.error('Failed to resolve server IP:', error);
-        return null;
-    }
-}
-
-function updateConnectionStatus(connected) {
-    const status = document.getElementById('fingerprint-status');
-    if (status) {
-        if (connected) {
-            status.style.color = '#00d4ff';
-            status.innerText = 'Connected to device';
-        } else {
-            status.style.color = 'red';
-            status.innerText = 'Disconnected from device';
-        }
-    }
-}
-
-function verifyConnection() {
-    const currentIP = window.location.hostname;
-    console.log('Current page IP:', currentIP);
-    document.getElementById('debug-info').textContent = `Connected to: ${currentIP}`;
-}
-
-window.addEventListener('load', verifyConnection);
-
-document.addEventListener('DOMContentLoaded', function() {
-    const closeButton = document.querySelector('.close-button');
-    if (closeButton) {
-        closeButton.addEventListener('click', function(e) {
-            e.preventDefault();
-            console.log('Close button clicked');
-            closeFingerprintModal();
-        });
-    }
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            const modal = document.getElementById('fingerprint-modal');
-            if (modal && modal.style.display === 'flex') {
-                console.log('Escape key pressed, closing modal');
-                closeFingerprintModal();
-            }
-        }
-    });
-});
-
-function log(message, isError = false) {
-    if (debugMode) {
-        const method = isError ? console.error : console.log;
-        method(`[Fingerprint Registration] ${message}`);
-    }
-}
-
-async function checkESP32Connection() {
-    try {
-        log('Checking ESP32 connection...');
-        const response = await fetch('/', {
-            method: 'HEAD',
-            cache: 'no-cache'
-        });
-        if (response.ok) {
-            log('ESP32 is reachable');
-            return true;
-        }
-        log('ESP32 is not reachable', true);
-        return false;
-    } catch (error) {
-        log(`ESP32 connection check failed: ${error}`, true);
-        return false;
-    }
-}
-
-function initializeWebSocket(wsUrl, status) {
-    try {
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = function() {
-            console.log('WebSocket Connected successfully');
-            status.innerText = 'Connected, starting registration...';
-            status.style.color = '#00d4ff';
-            
-            setTimeout(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    console.log('Sending start command to server');
-                    ws.send('start');
-                    registrationInProgress = true;
-                } else {
-                    console.error('WebSocket not ready for start command');
-                    status.innerText = 'Connection error. Please try again.';
-                    status.style.color = 'red';
-                }
-            }, 500);
-        };
-
-        // Rest of the WebSocket handlers remain the same...
-        ws.onmessage = function(event) {
-            console.log('Received from server:', event.data);
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'progress') {
-                    const progressBar = document.querySelector('[role="progressbar"]');
-                    const status = document.getElementById('fingerprint-status');
-                    
-                    if (progressBar && status) {
-                        // Update status message
-                        status.innerText = data.message;
-                        
-                        // Handle animation if specified
-                        if (data.animate) {
-                            progressBar.style.setProperty('--value', data.progressValue.toString());
-                            progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
-                        } else {
-                            // Set fixed progress value
-                            progressBar.style.setProperty('--value', data.progressValue.toString());
-                            progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
-                        }
-                        
-                        // Change status color based on error messages
-                        if (data.message.includes('error') || data.message.includes('don\'t match')) {
-                            status.style.color = 'red';
-                            setTimeout(() => {
-                                status.style.color = '#00d4ff';
-                            }, 2000);
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error('Error parsing message:', error);
-            }
-        };
-
-        ws.onerror = function(error) {
-            console.error('WebSocket error:', error);
-            status.innerText = 'Connection error occurred';
-            status.style.color = 'red';
-        };
-
-        ws.onclose = function(event) {
-            console.log('WebSocket connection closed:', event.code, event.reason);
-            if (registrationInProgress) {
-                status.innerText = 'Connection lost';
-                status.style.color = 'red';
-            }
-        };
-    } catch (error) {
-        console.error('Error creating WebSocket:', error);
-        status.innerText = 'Failed to create connection';
-        status.style.color = 'red';
-    }
-}
-
-
-function setupWebSocketHandlers() {
-    ws.onopen = function() {
-        log('WebSocket connected successfully');
-        document.getElementById('fingerprint-status').innerText = 'Connected. Starting registration...';
-        
-        setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-                log('Sending start command');
-                ws.send("start");
-            } else {
-                log('WebSocket not ready for start command', true);
-                handleConnectionError('Connection not ready');
-            }
-        }, 500);
-    };
-
-    ws.onclose = function(event) {
-        log(`WebSocket closed: Code ${event.code}, Reason: ${event.reason}`);
-        if (registrationInProgress) {
-            handleConnectionError('Connection closed unexpectedly');
-        }
-    };
-
-    ws.onerror = function(error) {
-        log(`WebSocket error: ${error}`, true);
-        handleConnectionError('Connection error occurred');
-    };
-
-    ws.onmessage = function(event) {
-        try {
-            log(`Received message: ${event.data}`);
-            const data = JSON.parse(event.data);
-            
-            switch(data.type) {
-                case 'progress':
-                    updateProgress(data.step, data.message);
-                    break;
-                case 'cancel':
-                    handleCancelConfirmation();
-                    break;
-                case 'error':
-                    handleConnectionError(data.message);
-                    break;
-                case 'fingerprint':
-                    handleFingerprintMessage(data);
-                    break;
-                default:
-                    log(`Unhandled message type: ${data.type}`);
-            }
-        } catch (error) {
-            log(`Error parsing message: ${error}`, true);
-            handleConnectionError('Invalid response from device');
-        }
-    };
-}
-
-function handleFingerprintMessage(data) {
-    const { status, message } = data;
-    const fingerprintStatus = document.getElementById('fingerprint-status');
-    const fingerprintError = document.getElementById('fingerprint-error');
-    
-    if (fingerprintStatus) {
-        fingerprintStatus.innerText = message;
-        
-        if (status === 'waiting') {
-            fingerprintStatus.style.color = '#00d4ff';
-        } else if (status === 'error') {
-            fingerprintStatus.style.color = 'red';
-            setTimeout(() => {
-                fingerprintStatus.style.color = '#00d4ff';
-            }, 2000);
-        }
-    }
-
-    // Clear error message when fingerprint is successfully added
-    if (status === 'success' && fingerprintError) {
-        fingerprintError.innerText = '';
-    }
-}
-
-function handleCancelConfirmation() {
-    if (!registrationInProgress) {
-        console.warn("Cancel ignored: No active registration.");
-        return;
-    }
-    
-    // Only reset registration in progress, but keep the fingerprint status
-    registrationInProgress = false;
-    document.getElementById('fingerprint-modal').style.display = 'none';
-    
-    // Don't reset the fingerprint status if it was successfully added
-    if (!fingerprintAdded) {
-        resetFingerprintButton();
-    }
-}
-
-
-function disableFingerprintButton() {
-    const fingerprintButton = document.getElementById("add-fingerprint");
-    fingerprintButton.disabled = true;
-    fingerprintButton.style.backgroundColor = "#aaa7ad";
-    fingerprintButton.style.cursor = "not-allowed";
-}
-
-function resetFingerprintButton() {
-    const fingerprintButton = document.getElementById("add-fingerprint");
-    fingerprintButton.disabled = false;
-    fingerprintButton.style.backgroundColor = "#00d4ff";
-    fingerprintButton.style.cursor = "pointer";
-}
-
-function updateFingerprintStatus(isComplete) {
-    const fingerprintButton = document.getElementById("add-fingerprint");
-    const fingerprintError = document.getElementById("fingerprint-error");
-    
-    if (isComplete) {
-        // Disable button
-        fingerprintButton.disabled = true;
-        fingerprintButton.style.backgroundColor = "#aaa7ad";
-        fingerprintButton.style.cursor = "not-allowed";
-        
-        // Clear error message
-        if (fingerprintError) {
-            fingerprintError.innerText = '';
-        }
-        
-        // Set the global state
-        fingerprintAdded = true;
-    } else {
-        // Reset button
-        fingerprintButton.disabled = false;
-        fingerprintButton.style.backgroundColor = "#00d4ff";
-        fingerprintButton.style.cursor = "pointer";
-        
-        // Show error message
-        if (fingerprintError) {
-            fingerprintError.innerText = 'Fingerprint not added';
-        }
-        
-        // Reset the global state
-        fingerprintAdded = false;
-    }
-}
-
-function showFingerprintModal() {
-    console.log('Showing fingerprint modal...');
-    
-    if (registrationInProgress) {
-        console.log('Registration already in progress');
-        return;
-    }
-
-    const modal = document.getElementById('fingerprint-modal');
-    const progressBar = document.querySelector('[role="progressbar"]');
-    const status = document.getElementById('fingerprint-status');
-    
-    modal.style.display = 'flex';
-    progressBar.style.setProperty('--value', '0');
-    status.innerText = 'Resolving connection...';
-
-    // Close existing WebSocket if any
-    if (ws) {
-        console.log('Closing existing WebSocket connection');
-        ws.close();
-        ws = null;
-    }
-
-    // Resolve the server IP first
-    resolveServerIP().then(serverIP => {
-        if (!serverIP) {
-            throw new Error('Could not resolve server IP');
-        }
-
-        // Use the resolved IP for WebSocket connection
-        const wsUrl = `ws://${serverIP}:81`;
-        console.log('Attempting WebSocket connection to:', wsUrl);
-
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = function() {
-            console.log('WebSocket Connected successfully to', wsUrl);
-            status.innerText = 'Connected, starting registration...';
-            status.style.color = '#00d4ff';
-            
-            // Update debug info
-            const debugInfo = document.getElementById('debug-info');
-            if (debugInfo) {
-                debugInfo.textContent = `Connected to: ${serverIP} (resolved from ${window.location.hostname})`;
-            }
-            
-            setTimeout(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    console.log('Sending start command to server');
-                    ws.send('start');
-                    registrationInProgress = true;
-                } else {
-                    console.error('WebSocket not ready for start command');
-                    status.innerText = 'Connection error. Please try again.';
-                    status.style.color = 'red';
-                }
-            }, 500);
-        };
-
-        ws.onmessage = function(event) {
-            console.log('Received from server:', event.data);
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'progress') {
-                    updateProgress(data.step, data.message);
-                } else if (data.type === 'error') {
-                    handleConnectionError(data.message);
-                }
-            } catch (error) {
-                console.error('Error parsing message:', error);
-            }
-        };
-
-        ws.onerror = function(error) {
-            console.error('WebSocket error:', error);
-            status.innerText = 'Connection error occurred';
-            status.style.color = 'red';
-        };
-
-        ws.onclose = function(event) {
-            console.log('WebSocket connection closed:', event.code, event.reason);
-            if (registrationInProgress) {
-                status.innerText = 'Connection lost';
-                status.style.color = 'red';
-            }
-        };
-    }).catch(error => {
-        console.error('Connection error:', error);
-        status.innerText = 'Failed to resolve server address';
-        status.style.color = 'red';
-    });
-}
-
-// Add connection verification on page load
-window.addEventListener('load', async () => {
-    const serverIP = await resolveServerIP();
-    const debugInfo = document.getElementById('debug-info');
-    if (debugInfo) {
-        debugInfo.textContent = `Page loaded from: ${window.location.hostname} (Server IP: ${serverIP || 'unresolved'})`;
-    }
-});
-
-function closeFingerprintModal() {
-    console.log('Closing fingerprint modal...');
-    console.log('Current fingerprint status:', fingerprintAdded);
-    
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        console.log('Sending cancel command to server...');
-        ws.send("cancel");
-    }
-    
-    document.getElementById('fingerprint-modal').style.display = 'none';
-    const progressBar = document.querySelector('[role="progressbar"]');
-    if (progressBar) {
-        progressBar.style.setProperty('--value', '0');
-        progressBar.setAttribute('aria-valuenow', '0');
-    }
-    
-    // Only reset the status message if fingerprint wasn't successfully added
-    if (!fingerprintAdded) {
-        document.getElementById('fingerprint-status').innerText = 'Ready to start...';
-    }
-    
-    // Only partially reset the registration state
-    registrationInProgress = false;
-    
-    // Don't reset the fingerprint button if registration was successful
-    const fingerprintButton = document.getElementById('add-fingerprint');
-    if (fingerprintButton && !fingerprintAdded) {
-        resetFingerprintButton();
-    }
-    
-    // Clear any error messages if fingerprint was successfully added
-    if (fingerprintAdded) {
-        const fingerprintError = document.getElementById('fingerprint-error');
-        if (fingerprintError) {
-            fingerprintError.innerText = '';
-        }
-    }
-}
-
-function updateProgress(step, message) {
-    console.log(`Updating progress - Step: ${step}, Message: ${message}`);
-    const progressBar = document.querySelector('[role="progressbar"]');
-    const status = document.getElementById('fingerprint-status');
-    const fingerprintError = document.getElementById('fingerprint-error');
-    
-    if (!progressBar || !status) {
-        console.error('Progress elements not found');
-        return;
-    }
-    
-    let targetValue;
-    switch (step) {
-        case 0: targetValue = 25; break;
-        case 1: targetValue = 50; break;
-        case 2: targetValue = 75; break;
-        case 3: 
-            targetValue = 100;  // Make sure it's 100% for completion
-            registrationInProgress = false;
-            fingerprintAdded = true;
-            updateFingerprintStatus(true);  // This will update both button and error states
-            
-            // Remove error message
-            if (fingerprintError) {
-                fingerprintError.innerText = '';
-            }
-            
-            // Update progress bar to 100%
-            progressBar.style.setProperty('--value', '100');
-            progressBar.setAttribute('aria-valuenow', '100');
-            break;
-        default: targetValue = 0;
-    }
-
-    // Only update progress if not step 3 (since step 3 handles it separately above)
-    if (step !== 3) {
-        progressBar.style.setProperty('--value', targetValue.toString());
-        progressBar.setAttribute('aria-valuenow', targetValue.toString());
-    }
-    
-    status.innerText = message;
-    
-    console.log(`Progress updated - Value: ${targetValue}, Message: ${message}`);
-}
-
-function handleConnectionError(message) {
-    console.error('Connection error:', message);
-    const status = document.getElementById('fingerprint-status');
-    if (status) {
-        status.innerText = `Error: ${message}`;
-        status.style.color = 'red';
-    }
-    registrationInProgress = false;
-}
-
-
-window.onload = async function() {
-    try {
-        await fetch('/resetFingerprintStatus', { method: 'POST' });
-        console.log("Fingerprint status reset.");
-        
-        const response = await fetch('/getFingerprintStatus');
-        const data = await response.json();
-        
-        fingerprintAdded = data.fingerprintAdded;
-        if (fingerprintAdded) {
-            disableFingerprintButton();
-            // Clear error message if fingerprint is already added
-            const fingerprintError = document.getElementById('fingerprint-error');
-            if (fingerprintError) {
-                fingerprintError.innerText = '';
-            }
-        } else {
-            resetFingerprintButton();
-        }
-    } catch (err) {
-        console.error("Error during initialization:", err);
-    }
-};
-
-window.onbeforeunload = function() {
-    if (ws) {
-        ws.close();
-    }
-    resetRegistrationState();
-    return fetch('/resetFingerprintStatus', { method: 'POST' });
-};
-
-document.addEventListener('DOMContentLoaded', function() {
-    var form = document.getElementById('addUserForm');
-    form.addEventListener('submit', function(event) {
-    event.preventDefault();
-    
-    console.log("Form submission - Current states:");
-    console.log("fingerprintAdded:", fingerprintAdded);
-    console.log("registrationInProgress:", registrationInProgress);
-    
-    var formData = new FormData(form);
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', '/addUser', true);
-
-        xhr.onload = function() {
-            if (xhr.status === 200) {
-                var response = JSON.parse(xhr.responseText);
-                clearErrorMessages();
-        
-                if (response.success) {
-                    alert('New User Added Successfully! PIN: ' + response.pin);
-                    form.reset();
-                    resetFingerprintButton();  // Reset the button here
-                } else {
-                    displayErrorMessages(response.errors);
-                }
-            } else {
-                alert('An error occurred while processing your request.');
-            }
-        };
-
-        xhr.send(formData);
-    });
-
-    function clearErrorMessages() {
-        var usernameError = document.getElementById('username-error');
-        usernameError.innerText = '';
-
-        var usernameField = document.getElementById('username');
-        usernameField.classList.remove('input-error');
-
-        var captchaSection = document.getElementById('captcha-section');
-        captchaSection.classList.remove('captcha-error');
-
-        var captchaLabel = document.querySelector('.captcha label');
-        captchaLabel.classList.remove('captcha-error-label');
-
-        var fingerprintError = document.getElementById('fingerprint-error');
-        fingerprintError.innerText = '';
-    
-        var fingerprintButton = document.getElementById('add-fingerprint');
-        fingerprintButton.classList.remove('fingerprint-error');
-    
-        var voiceCommandError = document.getElementById('voice-command-error');
-        voiceCommandError.innerText = '';
-    
-        var voiceCommandSelect = document.getElementById('voice-command');
-        voiceCommandSelect.classList.remove('voice-command-error');
-    }
-
-    function displayErrorMessages(errors) {
-        if (errors.username) {
-            var usernameError = document.getElementById('username-error');
-            usernameError.innerText = errors.username;
-            var usernameField = document.getElementById('username');
-            usernameField.classList.add('input-error');
-        }
-
-        if (errors.captcha) {
-            var captchaSection = document.getElementById('captcha-section');
-            captchaSection.classList.add('captcha-error');
-        }
-
-        if (errors.fingerprint) {
-            var fingerprintError = document.getElementById('fingerprint-error');
-            fingerprintError.innerText = "Fingerprint not added";
-            var fingerprintButton = document.getElementById('add-fingerprint');
-            fingerprintButton.classList.add('fingerprint-error');
-        }
-    
-        if (errors.voiceCommand) {
-            var voiceCommandError = document.getElementById('voice-command-error');
-            voiceCommandError.innerText = errors.voiceCommand;
-            var voiceCommandSelect = document.getElementById('voice-command');
-            voiceCommandSelect.classList.add('voice-command-error');
-        }
-    }
-});
+  let ws;
+  let registrationInProgress = false;
+  let debugMode = true;
+  let fingerprintAdded = false;
+  
+  setInterval(() => {
+      if (ws) {
+          console.log('WebSocket state:', {
+              readyState: ws.readyState,
+              bufferedAmount: ws.bufferedAmount,
+              protocol: ws.protocol,
+              url: ws.url
+          });
+      }
+  }, 5000);
+  
+  let wsStatusInterval = setInterval(() => {
+      if (ws) {
+          const states = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+          console.log('WebSocket status:', {
+              state: states[ws.readyState],
+              readyState: ws.readyState,
+              url: ws.url
+          });
+      }
+  }, 3000);
+  
+  async function resolveServerIP() {
+      try {
+          // Make a request to get server info
+          const response = await fetch('/ws-info');
+          const serverInfo = await response.text();
+          
+          // Extract IP from the server info
+          const ipMatch = serverInfo.match(/Server IP: ([\d\.]+)/);
+          if (ipMatch && ipMatch[1]) {
+              console.log('Resolved server IP:', ipMatch[1]);
+              return ipMatch[1];
+          }
+          throw new Error('Could not extract IP from server info');
+      } catch (error) {
+          console.error('Failed to resolve server IP:', error);
+          return null;
+      }
+  }
+  
+  function updateConnectionStatus(connected) {
+      const status = document.getElementById('fingerprint-status');
+      if (status) {
+          if (connected) {
+              status.style.color = '#00d4ff';
+              status.innerText = 'Connected to device';
+          } else {
+              status.style.color = 'red';
+              status.innerText = 'Disconnected from device';
+          }
+      }
+  }
+  
+  function verifyConnection() {
+      const currentIP = window.location.hostname;
+      console.log('Current page IP:', currentIP);
+      document.getElementById('debug-info').textContent = `Connected to: ${currentIP}`;
+  }
+  
+  window.addEventListener('load', verifyConnection);
+  
+  document.addEventListener('DOMContentLoaded', function() {
+      const closeButton = document.querySelector('.close-button');
+      if (closeButton) {
+          closeButton.addEventListener('click', function(e) {
+              e.preventDefault();
+              console.log('Close button clicked');
+              closeFingerprintModal();
+          });
+      }
+  
+      document.addEventListener('keydown', function(e) {
+          if (e.key === 'Escape') {
+              const modal = document.getElementById('fingerprint-modal');
+              if (modal && modal.style.display === 'flex') {
+                  console.log('Escape key pressed, closing modal');
+                  closeFingerprintModal();
+              }
+          }
+      });
+  });
+  
+  function log(message, isError = false) {
+      if (debugMode) {
+          const method = isError ? console.error : console.log;
+          method(`[Fingerprint Registration] ${message}`);
+      }
+  }
+  
+  async function checkESP32Connection() {
+      try {
+          log('Checking ESP32 connection...');
+          const response = await fetch('/', {
+              method: 'HEAD',
+              cache: 'no-cache'
+          });
+          if (response.ok) {
+              log('ESP32 is reachable');
+              return true;
+          }
+          log('ESP32 is not reachable', true);
+          return false;
+      } catch (error) {
+          log(`ESP32 connection check failed: ${error}`, true);
+          return false;
+      }
+  }
+  
+  function initializeWebSocket(wsUrl, status) {
+      try {
+          ws = new WebSocket(wsUrl);
+          
+          ws.onopen = function() {
+              console.log('WebSocket Connected successfully');
+              status.innerText = 'Connected, starting registration...';
+              status.style.color = '#00d4ff';
+              
+              setTimeout(() => {
+                  if (ws.readyState === WebSocket.OPEN) {
+                      console.log('Sending start command to server');
+                      ws.send('start');
+                      registrationInProgress = true;
+                  } else {
+                      console.error('WebSocket not ready for start command');
+                      status.innerText = 'Connection error. Please try again.';
+                      status.style.color = 'red';
+                  }
+              }, 500);
+          };
+  
+          // Rest of the WebSocket handlers remain the same...
+          ws.onmessage = function(event) {
+              console.log('Received from server:', event.data);
+              try {
+                  const data = JSON.parse(event.data);
+                  if (data.type === 'progress') {
+                      const progressBar = document.querySelector('[role="progressbar"]');
+                      const status = document.getElementById('fingerprint-status');
+                      
+                      if (progressBar && status) {
+                          // Update status message
+                          status.innerText = data.message;
+                          
+                          // Handle animation if specified
+                          if (data.animate) {
+                              progressBar.style.setProperty('--value', data.progressValue.toString());
+                              progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
+                          } else {
+                              // Set fixed progress value
+                              progressBar.style.setProperty('--value', data.progressValue.toString());
+                              progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
+                          }
+                          
+                          // Change status color based on error messages
+                          if (data.message.includes('error') || data.message.includes('don\'t match')) {
+                              status.style.color = 'red';
+                              setTimeout(() => {
+                                  status.style.color = '#00d4ff';
+                              }, 2000);
+                          }
+                      }
+                  }
+              } catch (error) {
+                  console.error('Error parsing message:', error);
+              }
+          };
+  
+          ws.onerror = function(error) {
+              console.error('WebSocket error:', error);
+              status.innerText = 'Connection error occurred';
+              status.style.color = 'red';
+          };
+  
+          ws.onclose = function(event) {
+              console.log('WebSocket connection closed:', event.code, event.reason);
+              if (registrationInProgress) {
+                  status.innerText = 'Connection lost';
+                  status.style.color = 'red';
+              }
+          };
+      } catch (error) {
+          console.error('Error creating WebSocket:', error);
+          status.innerText = 'Failed to create connection';
+          status.style.color = 'red';
+      }
+  }
+  
+  
+  function setupWebSocketHandlers() {
+      ws.onopen = function() {
+          log('WebSocket connected successfully');
+          document.getElementById('fingerprint-status').innerText = 'Connected. Starting registration...';
+          
+          setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                  log('Sending start command');
+                  ws.send("start");
+              } else {
+                  log('WebSocket not ready for start command', true);
+                  handleConnectionError('Connection not ready');
+              }
+          }, 500);
+      };
+  
+      ws.onclose = function(event) {
+          log(`WebSocket closed: Code ${event.code}, Reason: ${event.reason}`);
+          if (registrationInProgress) {
+              handleConnectionError('Connection closed unexpectedly');
+          }
+      };
+  
+      ws.onerror = function(error) {
+          log(`WebSocket error: ${error}`, true);
+          handleConnectionError('Connection error occurred');
+      };
+  
+      ws.onmessage = function(event) {
+          try {
+              log(`Received message: ${event.data}`);
+              const data = JSON.parse(event.data);
+              
+              switch(data.type) {
+                  case 'progress':
+                      updateProgress(data.step, data.message);
+                      break;
+                  case 'cancel':
+                      handleCancelConfirmation();
+                      break;
+                  case 'error':
+                      handleConnectionError(data.message);
+                      break;
+                  case 'fingerprint':
+                      handleFingerprintMessage(data);
+                      break;
+                  default:
+                      log(`Unhandled message type: ${data.type}`);
+              }
+          } catch (error) {
+              log(`Error parsing message: ${error}`, true);
+              handleConnectionError('Invalid response from device');
+          }
+      };
+  }
+  
+  function handleFingerprintMessage(data) {
+      const { status, message } = data;
+      const fingerprintStatus = document.getElementById('fingerprint-status');
+      const fingerprintError = document.getElementById('fingerprint-error');
+      
+      if (fingerprintStatus) {
+          fingerprintStatus.innerText = message;
+          
+          if (status === 'waiting') {
+              fingerprintStatus.style.color = '#00d4ff';
+          } else if (status === 'error') {
+              fingerprintStatus.style.color = 'red';
+              setTimeout(() => {
+                  fingerprintStatus.style.color = '#00d4ff';
+              }, 2000);
+          }
+      }
+  
+      // Clear error message when fingerprint is successfully added
+      if (status === 'success' && fingerprintError) {
+          fingerprintError.innerText = '';
+      }
+  }
+  
+  function handleCancelConfirmation() {
+      if (!registrationInProgress) {
+          console.warn("Cancel ignored: No active registration.");
+          return;
+      }
+      
+      // Only reset registration in progress, but keep the fingerprint status
+      registrationInProgress = false;
+      document.getElementById('fingerprint-modal').style.display = 'none';
+      
+      // Don't reset the fingerprint status if it was successfully added
+      if (!fingerprintAdded) {
+          resetFingerprintButton();
+      }
+  }
+  
+  
+  function disableFingerprintButton() {
+      const fingerprintButton = document.getElementById("add-fingerprint");
+      fingerprintButton.disabled = true;
+      fingerprintButton.style.backgroundColor = "#aaa7ad";
+      fingerprintButton.style.cursor = "not-allowed";
+  }
+  
+  function resetFingerprintButton() {
+      const fingerprintButton = document.getElementById("add-fingerprint");
+      fingerprintButton.disabled = false;
+      fingerprintButton.style.backgroundColor = "#00d4ff";
+      fingerprintButton.style.cursor = "pointer";
+  }
+  
+  function updateFingerprintStatus(isComplete) {
+      const fingerprintButton = document.getElementById("add-fingerprint");
+      const fingerprintError = document.getElementById("fingerprint-error");
+      
+      if (isComplete) {
+          // Disable button
+          fingerprintButton.disabled = true;
+          fingerprintButton.style.backgroundColor = "#aaa7ad";
+          fingerprintButton.style.cursor = "not-allowed";
+          
+          // Clear error message
+          if (fingerprintError) {
+              fingerprintError.innerText = '';
+          }
+          
+          // Set the global state
+          fingerprintAdded = true;
+      } else {
+          // Reset button
+          fingerprintButton.disabled = false;
+          fingerprintButton.style.backgroundColor = "#00d4ff";
+          fingerprintButton.style.cursor = "pointer";
+          
+          // Show error message
+          if (fingerprintError) {
+              fingerprintError.innerText = 'Fingerprint not added';
+          }
+          
+          // Reset the global state
+          fingerprintAdded = false;
+      }
+  }
+  
+  function showFingerprintModal() {
+      console.log('Showing fingerprint modal...');
+      
+      if (registrationInProgress) {
+          console.log('Registration already in progress');
+          return;
+      }
+  
+      const modal = document.getElementById('fingerprint-modal');
+      const progressBar = document.querySelector('[role="progressbar"]');
+      const status = document.getElementById('fingerprint-status');
+      
+      modal.style.display = 'flex';
+      progressBar.style.setProperty('--value', '0');
+      status.innerText = 'Resolving connection...';
+  
+      // Close existing WebSocket if any
+      if (ws) {
+          console.log('Closing existing WebSocket connection');
+          ws.close();
+          ws = null;
+      }
+  
+      // Resolve the server IP first
+      resolveServerIP().then(serverIP => {
+          if (!serverIP) {
+              throw new Error('Could not resolve server IP');
+          }
+  
+          // Use the resolved IP for WebSocket connection
+          const wsUrl = `ws://${serverIP}:81`;
+          console.log('Attempting WebSocket connection to:', wsUrl);
+  
+          ws = new WebSocket(wsUrl);
+          
+          ws.onopen = function() {
+              console.log('WebSocket Connected successfully to', wsUrl);
+              status.innerText = 'Connected, starting registration...';
+              status.style.color = '#00d4ff';
+              
+              // Update debug info
+              const debugInfo = document.getElementById('debug-info');
+              if (debugInfo) {
+                  debugInfo.textContent = `Connected to: ${serverIP} (resolved from ${window.location.hostname})`;
+              }
+              
+              setTimeout(() => {
+                  if (ws.readyState === WebSocket.OPEN) {
+                      console.log('Sending start command to server');
+                      ws.send('start');
+                      registrationInProgress = true;
+                  } else {
+                      console.error('WebSocket not ready for start command');
+                      status.innerText = 'Connection error. Please try again.';
+                      status.style.color = 'red';
+                  }
+              }, 500);
+          };
+  
+          ws.onmessage = function(event) {
+              console.log('Received from server:', event.data);
+              try {
+                  const data = JSON.parse(event.data);
+                  if (data.type === 'progress') {
+                      updateProgress(data.step, data.message);
+                  } else if (data.type === 'error') {
+                      handleConnectionError(data.message);
+                  }
+              } catch (error) {
+                  console.error('Error parsing message:', error);
+              }
+          };
+  
+          ws.onerror = function(error) {
+              console.error('WebSocket error:', error);
+              status.innerText = 'Connection error occurred';
+              status.style.color = 'red';
+          };
+  
+          ws.onclose = function(event) {
+              console.log('WebSocket connection closed:', event.code, event.reason);
+              if (registrationInProgress) {
+                  status.innerText = 'Connection lost';
+                  status.style.color = 'red';
+              }
+          };
+      }).catch(error => {
+          console.error('Connection error:', error);
+          status.innerText = 'Failed to resolve server address';
+          status.style.color = 'red';
+      });
+  }
+  
+  // Add connection verification on page load
+  window.addEventListener('load', async () => {
+      const serverIP = await resolveServerIP();
+      const debugInfo = document.getElementById('debug-info');
+      if (debugInfo) {
+          debugInfo.textContent = `Page loaded from: ${window.location.hostname} (Server IP: ${serverIP || 'unresolved'})`;
+      }
+  });
+  
+  function closeFingerprintModal() {
+      console.log('Closing fingerprint modal...');
+      console.log('Current fingerprint status:', fingerprintAdded);
+      
+      if (ws && ws.readyState === WebSocket.OPEN) {
+          console.log('Sending cancel command to server...');
+          ws.send("cancel");
+      }
+      
+      document.getElementById('fingerprint-modal').style.display = 'none';
+      const progressBar = document.querySelector('[role="progressbar"]');
+      if (progressBar) {
+          progressBar.style.setProperty('--value', '0');
+          progressBar.setAttribute('aria-valuenow', '0');
+      }
+      
+      // Only reset the status message if fingerprint wasn't successfully added
+      if (!fingerprintAdded) {
+          document.getElementById('fingerprint-status').innerText = 'Ready to start...';
+      }
+      
+      // Only partially reset the registration state
+      registrationInProgress = false;
+      
+      // Don't reset the fingerprint button if registration was successful
+      const fingerprintButton = document.getElementById('add-fingerprint');
+      if (fingerprintButton && !fingerprintAdded) {
+          resetFingerprintButton();
+      }
+      
+      // Clear any error messages if fingerprint was successfully added
+      if (fingerprintAdded) {
+          const fingerprintError = document.getElementById('fingerprint-error');
+          if (fingerprintError) {
+              fingerprintError.innerText = '';
+          }
+      }
+  }
+  
+  function updateProgress(step, message) {
+      console.log(`Updating progress - Step: ${step}, Message: ${message}`);
+      const progressBar = document.querySelector('[role="progressbar"]');
+      const status = document.getElementById('fingerprint-status');
+      const fingerprintError = document.getElementById('fingerprint-error');
+      
+      if (!progressBar || !status) {
+          console.error('Progress elements not found');
+          return;
+      }
+      
+      let targetValue;
+      switch (step) {
+          case 0: targetValue = 25; break;
+          case 1: targetValue = 50; break;
+          case 2: targetValue = 75; break;
+          case 3: 
+              targetValue = 100;  // Make sure it's 100% for completion
+              registrationInProgress = false;
+              fingerprintAdded = true;
+              updateFingerprintStatus(true);  // This will update both button and error states
+              
+              // Remove error message
+              if (fingerprintError) {
+                  fingerprintError.innerText = '';
+              }
+              
+              // Update progress bar to 100%
+              progressBar.style.setProperty('--value', '100');
+              progressBar.setAttribute('aria-valuenow', '100');
+              break;
+          default: targetValue = 0;
+      }
+  
+      // Only update progress if not step 3 (since step 3 handles it separately above)
+      if (step !== 3) {
+          progressBar.style.setProperty('--value', targetValue.toString());
+          progressBar.setAttribute('aria-valuenow', targetValue.toString());
+      }
+      
+      status.innerText = message;
+      
+      console.log(`Progress updated - Value: ${targetValue}, Message: ${message}`);
+  }
+  
+  function handleConnectionError(message) {
+      console.error('Connection error:', message);
+      const status = document.getElementById('fingerprint-status');
+      if (status) {
+          status.innerText = `Error: ${message}`;
+          status.style.color = 'red';
+      }
+      registrationInProgress = false;
+  }
+  
+  
+  window.onload = async function() {
+      try {
+          await fetch('/resetFingerprintStatus', { method: 'POST' });
+          console.log("Fingerprint status reset.");
+          
+          const response = await fetch('/getFingerprintStatus');
+          const data = await response.json();
+          
+          fingerprintAdded = data.fingerprintAdded;
+          if (fingerprintAdded) {
+              disableFingerprintButton();
+              // Clear error message if fingerprint is already added
+              const fingerprintError = document.getElementById('fingerprint-error');
+              if (fingerprintError) {
+                  fingerprintError.innerText = '';
+              }
+          } else {
+              resetFingerprintButton();
+          }
+      } catch (err) {
+          console.error("Error during initialization:", err);
+      }
+  };
+  
+  window.onbeforeunload = function() {
+      if (ws) {
+          ws.close();
+      }
+      resetRegistrationState();
+      return fetch('/resetFingerprintStatus', { method: 'POST' });
+  };
+  
+  document.addEventListener('DOMContentLoaded', function() {
+      var form = document.getElementById('addUserForm');
+      form.addEventListener('submit', function(event) {
+      event.preventDefault();
+      
+      console.log("Form submission - Current states:");
+      console.log("fingerprintAdded:", fingerprintAdded);
+      console.log("registrationInProgress:", registrationInProgress);
+      
+      var formData = new FormData(form);
+          var xhr = new XMLHttpRequest();
+          xhr.open('POST', '/addUser', true);
+  
+          xhr.onload = function() {
+              if (xhr.status === 200) {
+                  var response = JSON.parse(xhr.responseText);
+                  clearErrorMessages();
+          
+                  if (response.success) {
+                      alert('New User Added Successfully! PIN: ' + response.pin);
+                      form.reset();
+                      resetFingerprintButton();  // Reset the button here
+                  } else {
+                      displayErrorMessages(response.errors);
+                  }
+              } else {
+                  alert('An error occurred while processing your request.');
+              }
+          };
+  
+          xhr.send(formData);
+      });
+  
+      function clearErrorMessages() {
+          var usernameError = document.getElementById('username-error');
+          usernameError.innerText = '';
+  
+          var usernameField = document.getElementById('username');
+          usernameField.classList.remove('input-error');
+  
+          var captchaSection = document.getElementById('captcha-section');
+          captchaSection.classList.remove('captcha-error');
+  
+          var captchaLabel = document.querySelector('.captcha label');
+          captchaLabel.classList.remove('captcha-error-label');
+  
+          var fingerprintError = document.getElementById('fingerprint-error');
+          fingerprintError.innerText = '';
+      
+          var fingerprintButton = document.getElementById('add-fingerprint');
+          fingerprintButton.classList.remove('fingerprint-error');
+      
+          var voiceCommandError = document.getElementById('voice-command-error');
+          voiceCommandError.innerText = '';
+      
+          var voiceCommandSelect = document.getElementById('voice-command');
+          voiceCommandSelect.classList.remove('voice-command-error');
+      }
+  
+      function displayErrorMessages(errors) {
+          if (errors.username) {
+              var usernameError = document.getElementById('username-error');
+              usernameError.innerText = errors.username;
+              var usernameField = document.getElementById('username');
+              usernameField.classList.add('input-error');
+          }
+  
+          if (errors.captcha) {
+              var captchaSection = document.getElementById('captcha-section');
+              captchaSection.classList.add('captcha-error');
+          }
+  
+          if (errors.fingerprint) {
+              var fingerprintError = document.getElementById('fingerprint-error');
+              fingerprintError.innerText = "Fingerprint not added";
+              var fingerprintButton = document.getElementById('add-fingerprint');
+              fingerprintButton.classList.add('fingerprint-error');
+          }
+      
+          if (errors.voiceCommand) {
+              var voiceCommandError = document.getElementById('voice-command-error');
+              voiceCommandError.innerText = errors.voiceCommand;
+              var voiceCommandSelect = document.getElementById('voice-command');
+              voiceCommandSelect.classList.add('voice-command-error');
+          }
+      }
+  });
     </script>
-</body>
-</html>
+    </body>
+    </html>
     )rawliteral";
 
     server.send(200, "text/html", pageContent);
