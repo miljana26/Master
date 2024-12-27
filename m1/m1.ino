@@ -38,7 +38,7 @@ bool clientConnected[MAX_CLIENTS] = {false};
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 DFRobot_DF2301Q_I2C asr(&Wire1);
 
-const char *ssid = "MS";
+const char *ssid = "Redmi";
 const char *password = "zastomezezas";
 const char* telegramToken = "7454592874:AAE7dneypwpAgrV2GxIsEVole_JwEyjh9RE";  // Bot tokenom
 const char* chatId = "8017471176";  // chat_id korisnika
@@ -231,6 +231,45 @@ bool isIDLinkedToUser(int id) {
     return false;
 }
 
+void resetRegistrationProcess() {
+    static bool resetInProgress = false;
+    if (resetInProgress) return; // Prevent duplicate resets
+    resetInProgress = true;
+
+    Serial.println("Resetting registration process");
+    
+    // If we had an ID assigned but registration wasn't completed, release it
+    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
+        Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
+        finger.deleteModel(currentRegistration.assignedID);
+        currentRegistration.assignedID = -1;
+    }
+    
+    registrationActive = false;
+    currentStep = 0;
+    idAssigned = false;
+    isAssigningId = false;
+    fingerprintAdded = false;
+    
+    if (!fingerprintAdded) {
+        saveFingerprintAdded(false);
+    }
+    
+    // Reset the registration state
+    currentRegistration = {
+        -1,             // No ID assigned
+        false,          // Registration not complete
+        0              // No start time
+    };
+
+    if (webSocket.connectedClients() > 0) {
+        String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
+        webSocket.broadcastTXT(resetMsg);
+    }
+    
+    resetInProgress = false;
+}
+
 void initializeRegistrationState() {
     currentRegistration = {
         -1,             // No ID assigned
@@ -341,45 +380,6 @@ void updatePINState(const String& pin) {
     String pinMsg;
     serializeJson(doc, pinMsg);
     webSocket.broadcastTXT(pinMsg);
-}
-
-void resetRegistrationProcess() {
-    static bool resetInProgress = false;
-    if (resetInProgress) return; // Prevent duplicate resets
-    resetInProgress = true;
-
-    Serial.println("Resetting registration process");
-    
-    // If we had an ID assigned but registration wasn't completed, release it
-    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
-        Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
-        finger.deleteModel(currentRegistration.assignedID);
-        currentRegistration.assignedID = -1;
-    }
-    
-    registrationActive = false;
-    currentStep = 0;
-    idAssigned = false;
-    isAssigningId = false;
-    fingerprintAdded = false;
-    
-    if (!fingerprintAdded) {
-        saveFingerprintAdded(false);
-    }
-    
-    // Reset the registration state
-    currentRegistration = {
-        -1,             // No ID assigned
-        false,          // Registration not complete
-        0              // No start time
-    };
-
-    if (webSocket.connectedClients() > 0) {
-        String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
-        webSocket.broadcastTXT(resetMsg);
-    }
-    
-    resetInProgress = false;
 }
 
 
