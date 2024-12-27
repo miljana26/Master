@@ -784,16 +784,45 @@ void moveServo() {
 void handlePasswordInput() {
     char key = keypad.getKey();
 
+    // Only process input if not already verified and key is pressed
     if (key && !firstStepVerified) {
+        // Check if motion was detected first
+        if (!isEnteringPin && !motionDetected) {
+            // If no motion detected, ignore input
+            display.clearDisplay();
+            display.setTextSize(1);
+            display.setCursor(0, 0);
+            display.println("Motion detection");
+            display.println("required first!");
+            display.display();
+            delay(2000);
+            
+            // Reset display to waiting for motion message
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.println("Waiting for motion...");
+            display.display();
+            return;
+        }
+
+        // If this is the first key press after motion detection
         if (!isEnteringPin) {
             isEnteringPin = true;
             isWaitingForMotion = false;
             digitalWrite(ledPin, HIGH);
             ledState = true;
             broadcastState("led", true);
+            
+            // Clear display and show initial PIN entry screen
+            display.clearDisplay();
+            display.setCursor(0, 0);
+            display.print("Enter PIN:");
+            display.display();
         }
 
+        // Handle PIN entry
         if (key == '#') {
+            // Check PIN against registered users
             for (User &user : users) {
                 if (user.pin == enteredPassword) {
                     authenticatedUser = &user;
@@ -814,6 +843,7 @@ void handlePasswordInput() {
                 }
             }
 
+            // Handle incorrect PIN
             attempts++;
             if (attempts >= maxAttempts) {
                 Serial.println("Too many failed attempts!");
@@ -843,6 +873,7 @@ void handlePasswordInput() {
             updatePINState("");
             
         } else if (key == '*') {
+            // Handle backspace
             if (enteredPassword.length() > 0) {
                 enteredPassword.remove(enteredPassword.length() - 1);
                 updatePINState(enteredPassword);
@@ -857,6 +888,7 @@ void handlePasswordInput() {
                 display.display();
             }
         } else {
+            // Add new digit to PIN
             enteredPassword += key;
             updatePINState(enteredPassword);
             
