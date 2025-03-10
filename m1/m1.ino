@@ -13,10 +13,8 @@
 #include <Adafruit_Fingerprint.h>
 #include "DFRobot_DF2301Q.h"
 
-
-
-#define RX_PIN 16  
-#define TX_PIN 17  
+#define RX_PIN 16
+#define TX_PIN 17
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
@@ -38,27 +36,26 @@ bool clientConnected[MAX_CLIENTS] = {false};
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 DFRobot_DF2301Q_I2C asr(&Wire1);
 
-const char *ssid = "Redmi";
-const char *password = "zastomezezas";
-const char* telegramToken = "7454592874:AAE7dneypwpAgrV2GxIsEVole_JwEyjh9RE";  // Bot tokenom
-const char* chatId = "8017471176";  // chat_id korisnika
+const char *ssid = "MS";
+const char *password = "sifra";
+const char *telegramToken = "bot_token";
+const char *chatId = "chat_ID";
 
-
-// Struktura za login korisnika
-struct User {
-  String username;
-  String pin;
-  String fingerprintID; 
-  String voiceCommand;  
+struct User
+{
+    String username;
+    String pin;
+    String fingerprintID;
+    String voiceCommand;
 };
 
-struct RegistrationState {
+struct RegistrationState
+{
     int assignedID;
     bool registrationComplete;
     unsigned long startTime;
 } currentRegistration;
 
-// Lista korisnika
 std::vector<User> users;
 
 WebServer server(80);
@@ -69,29 +66,29 @@ User loggedInUser = {"", ""};
 
 const int ledPin = 5;
 const int pirPin = 23;
-bool motionDetected = false;  // Flag za praćenje detekcije pokreta
-const int blueLedPin = 2;  // Pin za plavu LED diodu (GPIO 2)
-int blockTime = 0; // Vreme koje blokira korisnika nakon 3 pogrešna unosa
-bool isEnteringPin = false;  // Prati da li je u toku unos PIN-a
-bool isWaitingForMotion = true;  // Da li sistem čeka na pokret
-bool loginFailed = false;  // Globalna promenljiva za praćenje neuspešnog logina
-const unsigned long ledOnTimeout = 180000;  // 3 minute timeout for LED
+bool motionDetected = false;
+const int blueLedPin = 2;
+int blockTime = 0;
+bool isEnteringPin = false;
+bool isWaitingForMotion = true;
+bool loginFailed = false;
+const unsigned long ledOnTimeout = 180000;
 unsigned long ledTurnOnTime = 0;
-String lastGeneratedPin = "";  // Globalna promenljiva za čuvanje poslednjeg generisanog PIN-a
-const unsigned long pirDebounceDelay = 500;  // 500 ms debounce period
+String lastGeneratedPin = "";
+const unsigned long pirDebounceDelay = 500;
 unsigned long lastPirReadTime = 0;
 bool lastPirState = LOW;
-bool ledState = false;  // Trenutno stanje LED diode
-bool motionState = false;  // Trenutno stanje PIR senzora
-bool alarmState = false;  // Trenutno stanje alarma
-bool doorState = false;  // Trenutno stanje vrata (zatvorena ili otvorena)
-uint8_t loggedInClientNum = -1;  // Promenljiva za čuvanje identifikatora ulogovanog klijenta
-String motionDetectedTime = "";  // Za čuvanje vremena detekcije pokreta
-int currentStep = 0;  // Globalna promenljiva za praćenje koraka
+bool ledState = false;
+bool motionState = false;
+bool alarmState = false;
+bool doorState = false;
+uint8_t loggedInClientNum = -1;
+String motionDetectedTime = "";
+int currentStep = 0;
 bool noFingerMessageShown = false;
 bool registrationActive = false;
-bool fingerprintAdded = false;  // Praćenje statusa otiska prsta
-int fingerprintID = 0;  // Podesi početnu vrednost na 0 ili neku odgovarajuću vrednost
+bool fingerprintAdded = false;
+int fingerprintID = 0;
 volatile bool isAssigningId = false;
 volatile bool idAssigned = false;
 SemaphoreHandle_t fingerprintMutex;
@@ -100,28 +97,25 @@ unsigned long lastRegistrationDebug = 0;
 bool registrationDebugEnabled = true;
 bool firstStepVerified = false;
 String expectedVoiceCommand = "";
-//debug
+
 int lastDebuggedStep = -1;
 bool lastDebuggedIDAssigned = false;
 bool lastDebuggedFingerprintAdded = false;
 bool lastDebuggedRegistrationActive = false;
 static bool wakeWordDetected = false;
-User* authenticatedUser = nullptr;  // Global pointer to store authenticated user
+User *authenticatedUser = nullptr;
 
-
-HardwareSerial mySerial(2); // Koristi Serial2 za komunikaciju sa senzorom
+HardwareSerial mySerial(2);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 
-// Keypad setup
 const byte ROWS = 4;
 const byte COLS = 4;
 
 char keys[ROWS][COLS] = {
-  {'1', '2', '3', 'A'},
-  {'4', '5', '6', 'B'},
-  {'7', '8', '9', 'C'},
-  {'*', '0', '#', 'D'}
-};
+    {'1', '2', '3', 'A'},
+    {'4', '5', '6', 'B'},
+    {'7', '8', '9', 'C'},
+    {'*', '0', '#', 'D'}};
 
 byte rowPins[ROWS] = {13, 12, 14, 27};
 byte colPins[COLS] = {26, 25, 15, 2};
@@ -129,49 +123,45 @@ byte colPins[COLS] = {26, 25, 15, 2};
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 String enteredPassword = "";
-String correctPassword = "133A";
 int attempts = 0;
 const int maxAttempts = 3;
 int voiceAttempts = 0;
 const int maxVoiceAttempts = 3;
 
-// Servo setup
 Servo myservo;
 int servoPin = 18;
 int pos = 0;
 
 unsigned long pirActivationTime = 0;
-const unsigned long pirTimeout = 180000;  // 3 minuta timeout
+const unsigned long pirTimeout = 180000;
 
-void broadcastState(const char* type, bool state = false, const char* additional = nullptr) {
+void broadcastState(const char *type, bool state = false, const char *additional = nullptr)
+{
     DynamicJsonDocument doc(256);
     doc["type"] = type;
     doc["state"] = state;
-    if (additional != nullptr) {
+    if (additional != nullptr)
+    {
         doc["time"] = additional;
     }
-    
+
     String message;
     serializeJson(doc, message);
     webSocket.broadcastTXT(message);
-    
+
     Serial.printf("Broadcasting %s state: %s\n", type, state ? "true" : "false");
 }
 
-
-
-// Helper function to send all current states to a specific client
-void sendAllStatusesToClient(uint8_t clientNum) {
+void sendAllStatusesToClient(uint8_t clientNum)
+{
     DynamicJsonDocument stateDoc(256);
     String stateMsg;
 
-    // Send LED state
     stateDoc["type"] = "led";
     stateDoc["state"] = ledState;
     serializeJson(stateDoc, stateMsg);
     webSocket.sendTXT(clientNum, stateMsg);
 
-    // Send motion state
     stateDoc.clear();
     stateDoc["type"] = "motion";
     stateDoc["state"] = motionState;
@@ -180,7 +170,6 @@ void sendAllStatusesToClient(uint8_t clientNum) {
     serializeJson(stateDoc, stateMsg);
     webSocket.sendTXT(clientNum, stateMsg);
 
-    // Send PIN state
     stateDoc.clear();
     stateDoc["type"] = "pin";
     stateDoc["value"] = enteredPassword;
@@ -188,7 +177,6 @@ void sendAllStatusesToClient(uint8_t clientNum) {
     serializeJson(stateDoc, stateMsg);
     webSocket.sendTXT(clientNum, stateMsg);
 
-    // Send alarm state
     stateDoc.clear();
     stateDoc["type"] = "alarm";
     stateDoc["state"] = alarmState;
@@ -196,7 +184,6 @@ void sendAllStatusesToClient(uint8_t clientNum) {
     serializeJson(stateDoc, stateMsg);
     webSocket.sendTXT(clientNum, stateMsg);
 
-    // Send door state
     stateDoc.clear();
     stateDoc["type"] = "doors";
     stateDoc["state"] = doorState;
@@ -205,92 +192,104 @@ void sendAllStatusesToClient(uint8_t clientNum) {
     webSocket.sendTXT(clientNum, stateMsg);
 }
 
-
-void sendTelegramMessage(const String& message) {
+void sendTelegramMessage(const String &message)
+{
     HTTPClient http;
-    String url = "https://api.telegram.org/bot" + String(telegramToken) + "/sendMessage?chat_id=" + chatId + "&text=" + message;
+    String url = "https:
 
-    http.begin(url);
+                 http.begin(url);
     int httpResponseCode = http.GET();
 
-    if (httpResponseCode > 0) {
+    if (httpResponseCode > 0)
+    {
         Serial.printf("Telegram message sent. Response code: %d\n", httpResponseCode);
-    } else {
+    }
+    else
+    {
         Serial.printf("Error sending Telegram message. Response code: %d\n", httpResponseCode);
     }
 
     http.end();
 }
 
-bool isIDLinkedToUser(int id) {
-    for (const User &user : users) {
-        if (user.fingerprintID.toInt() == id) {
+bool isIDLinkedToUser(int id)
+{
+    for (const User &user : users)
+    {
+        if (user.fingerprintID.toInt() == id)
+        {
             return true;
         }
     }
     return false;
 }
 
-void resetRegistrationProcess() {
+void resetRegistrationProcess()
+{
     static bool resetInProgress = false;
-    if (resetInProgress) return; // Prevent duplicate resets
+    if (resetInProgress)
+        return;
     resetInProgress = true;
 
     Serial.println("Resetting registration process");
-    
-    // If we had an ID assigned but registration wasn't completed, release it
-    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
+
+    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete)
+    {
         Serial.printf("Releasing incomplete registration ID: %d\n", currentRegistration.assignedID);
         finger.deleteModel(currentRegistration.assignedID);
         currentRegistration.assignedID = -1;
     }
-    
+
     registrationActive = false;
     currentStep = 0;
     idAssigned = false;
     isAssigningId = false;
     fingerprintAdded = false;
-    
-    if (!fingerprintAdded) {
+
+    if (!fingerprintAdded)
+    {
         saveFingerprintAdded(false);
     }
-    
-    // Reset the registration state
-    currentRegistration = {
-        -1,             // No ID assigned
-        false,          // Registration not complete
-        0              // No start time
-    };
 
-    if (webSocket.connectedClients() > 0) {
+    currentRegistration = {
+        -1,
+        false,
+        0};
+
+    if (webSocket.connectedClients() > 0)
+    {
         String resetMsg = "{\"type\":\"progress\",\"step\":0,\"message\":\"Registration reset\"}";
         webSocket.broadcastTXT(resetMsg);
     }
-    
+
     resetInProgress = false;
 }
 
-void initializeRegistrationState() {
+void initializeRegistrationState()
+{
     currentRegistration = {
-        -1,             // No ID assigned
-        false,          // Registration not complete
-        0              // No start time
-    };
+        -1,
+        false,
+        0};
 }
 
-void checkRegistrationTimeout() {
-    if (registrationActive && currentRegistration.startTime > 0) {
-        if (millis() - currentRegistration.startTime > 180000) { // 3 minutes
+void checkRegistrationTimeout()
+{
+    if (registrationActive && currentRegistration.startTime > 0)
+    {
+        if (millis() - currentRegistration.startTime > 180000)
+        {
             Serial.println("Registration timed out");
             resetRegistrationProcess();
         }
     }
 }
 
-// Čuvanje otiska u memoriju
-void saveFingerprintAdded(bool status) {
+void saveFingerprintAdded(bool status)
+{
     File file = SPIFFS.open("/fingerprintAdded.txt", FILE_WRITE);
-    if (!file) {
+    if (!file)
+    {
         Serial.println("Failed to open file for writing");
         return;
     }
@@ -299,7 +298,8 @@ void saveFingerprintAdded(bool status) {
     Serial.println("Saved fingerprintAdded to SPIFFS");
 }
 
-void startFingerprintRegistration() {
+void startFingerprintRegistration()
+{
     Serial.println("\n[Registration] Starting new fingerprint registration...");
     logRegistrationStatus("Before Registration Start");
 
@@ -313,7 +313,6 @@ void startFingerprintRegistration() {
 
     logRegistrationStatus("After Registration Start");
 
-    // Send initial progress update to all connected clients
     DynamicJsonDocument doc(200);
     doc["type"] = "progress";
     doc["step"] = 0;
@@ -323,21 +322,22 @@ void startFingerprintRegistration() {
     webSocket.broadcastTXT(response);
 }
 
-void logRegistrationStatus(const char* location) {
+void logRegistrationStatus(const char *location)
+{
     bool stateChanged = false;
-    
+
     if (lastDebuggedStep != currentStep ||
         lastDebuggedIDAssigned != idAssigned ||
         lastDebuggedFingerprintAdded != fingerprintAdded ||
-        lastDebuggedRegistrationActive != registrationActive) {
-        
+        lastDebuggedRegistrationActive != registrationActive)
+    {
+
         Serial.printf("\n=== Registration Status at %s ===\n", location);
         Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
         Serial.printf("currentStep: %d\n", currentStep);
         Serial.printf("isAssigningId: %s\n", isAssigningId ? "true" : "false");
         Serial.printf("idAssigned: %s\n", idAssigned ? "true" : "false");
-        
-        // Update the last known states
+
         lastDebuggedStep = currentStep;
         lastDebuggedIDAssigned = idAssigned;
         lastDebuggedFingerprintAdded = fingerprintAdded;
@@ -345,35 +345,38 @@ void logRegistrationStatus(const char* location) {
     }
 }
 
-
-void updateMotionState(bool detected, const char* time = nullptr) {
+void updateMotionState(bool detected, const char *time = nullptr)
+{
     motionState = detected;
     digitalWrite(ledPin, detected ? HIGH : LOW);
     ledState = detected;
-    
-    // Broadcast both motion and LED states
+
     broadcastState("motion", detected, time);
     broadcastState("led", ledState);
 }
 
-void updateLEDState(bool state) {
+void updateLEDState(bool state)
+{
     ledState = state;
     digitalWrite(ledPin, state ? HIGH : LOW);
     broadcastState("led", state);
 }
 
-void updateAlarmState(bool state) {
+void updateAlarmState(bool state)
+{
     alarmState = state;
     digitalWrite(blueLedPin, state ? HIGH : LOW);
     broadcastState("alarm", state);
 }
 
-void updateDoorState(bool state) {
+void updateDoorState(bool state)
+{
     doorState = state;
     broadcastState("doors", state);
 }
 
-void updatePINState(const String& pin) {
+void updatePINState(const String &pin)
+{
     DynamicJsonDocument doc(200);
     doc["type"] = "pin";
     doc["value"] = pin;
@@ -382,296 +385,306 @@ void updatePINState(const String& pin) {
     webSocket.broadcastTXT(pinMsg);
 }
 
-
-// WebSocket event handler
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-    switch(type) {
-        case WStype_DISCONNECTED:
-            Serial.printf("[WebSocket] Client #%u disconnected\n", num);
-            if (num < MAX_CLIENTS) {
-                clientConnected[num] = false;
-                if (connectedClients > 0) {
-                    connectedClients--;
-                }
-            }
-            break;
-            
-        case WStype_CONNECTED:
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
+{
+    switch (type)
+    {
+    case WStype_DISCONNECTED:
+        Serial.printf("[WebSocket] Client #%u disconnected\n", num);
+        if (num < MAX_CLIENTS)
+        {
+            clientConnected[num] = false;
+            if (connectedClients > 0)
             {
-                IPAddress ip = webSocket.remoteIP(num);
-                Serial.printf("[WebSocket] Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
-                
-                // Update client tracking
-                if (num < MAX_CLIENTS && !clientConnected[num]) {
-                    clientConnected[num] = true;
-                    connectedClients++;
-                }
-
-                // Send current states
-                DynamicJsonDocument stateDoc(256);
-                String stateMsg;
-
-                // Motion state
-                stateDoc["type"] = "motion";
-                stateDoc["state"] = motionState;
-                stateDoc["time"] = motionDetectedTime;
-                serializeJson(stateDoc, stateMsg);
-                webSocket.sendTXT(num, stateMsg);
-
-                // LED state
-                stateDoc.clear();
-                stateMsg = "";
-                stateDoc["type"] = "led";
-                stateDoc["state"] = ledState;
-                serializeJson(stateDoc, stateMsg);
-                webSocket.sendTXT(num, stateMsg);
-
-                // Alarm state
-                stateDoc.clear();
-                stateMsg = "";
-                stateDoc["type"] = "alarm";
-                stateDoc["state"] = alarmState;
-                serializeJson(stateDoc, stateMsg);
-                webSocket.sendTXT(num, stateMsg);
-
-                // Door state
-                stateDoc.clear();
-                stateMsg = "";
-                stateDoc["type"] = "doors";
-                stateDoc["state"] = doorState;
-                serializeJson(stateDoc, stateMsg);
-                webSocket.sendTXT(num, stateMsg);
-
-                // PIN state
-                stateDoc.clear();
-                stateMsg = "";
-                stateDoc["type"] = "pin";
-                stateDoc["value"] = enteredPassword;
-                serializeJson(stateDoc, stateMsg);
-                webSocket.sendTXT(num, stateMsg);
+                connectedClients--;
             }
-            break;
-            
-        case WStype_TEXT:
+        }
+        break;
+
+    case WStype_CONNECTED:
+    {
+        IPAddress ip = webSocket.remoteIP(num);
+        Serial.printf("[WebSocket] Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+
+        if (num < MAX_CLIENTS && !clientConnected[num])
+        {
+            clientConnected[num] = true;
+            connectedClients++;
+        }
+
+        DynamicJsonDocument stateDoc(256);
+        String stateMsg;
+
+        stateDoc["type"] = "motion";
+        stateDoc["state"] = motionState;
+        stateDoc["time"] = motionDetectedTime;
+        serializeJson(stateDoc, stateMsg);
+        webSocket.sendTXT(num, stateMsg);
+
+        stateDoc.clear();
+        stateMsg = "";
+        stateDoc["type"] = "led";
+        stateDoc["state"] = ledState;
+        serializeJson(stateDoc, stateMsg);
+        webSocket.sendTXT(num, stateMsg);
+
+        stateDoc.clear();
+        stateMsg = "";
+        stateDoc["type"] = "alarm";
+        stateDoc["state"] = alarmState;
+        serializeJson(stateDoc, stateMsg);
+        webSocket.sendTXT(num, stateMsg);
+
+        stateDoc.clear();
+        stateMsg = "";
+        stateDoc["type"] = "doors";
+        stateDoc["state"] = doorState;
+        serializeJson(stateDoc, stateMsg);
+        webSocket.sendTXT(num, stateMsg);
+
+        stateDoc.clear();
+        stateMsg = "";
+        stateDoc["type"] = "pin";
+        stateDoc["value"] = enteredPassword;
+        serializeJson(stateDoc, stateMsg);
+        webSocket.sendTXT(num, stateMsg);
+    }
+    break;
+
+    case WStype_TEXT:
+    {
+        String text = String((char *)payload);
+        Serial.printf("[WebSocket] Received text from #%u: %s\n", num, text.c_str());
+
+        if (text == "refresh" || text == "getStates")
+        {
+
+            DynamicJsonDocument stateDoc(256);
+            String stateMsg;
+
+            stateDoc["type"] = "motion";
+            stateDoc["state"] = motionState;
+            stateDoc["time"] = motionDetectedTime;
+            serializeJson(stateDoc, stateMsg);
+            webSocket.sendTXT(num, stateMsg);
+
+            stateDoc.clear();
+            stateMsg = "";
+            stateDoc["type"] = "led";
+            stateDoc["state"] = ledState;
+            serializeJson(stateDoc, stateMsg);
+            webSocket.sendTXT(num, stateMsg);
+
+            stateDoc.clear();
+            stateMsg = "";
+            stateDoc["type"] = "alarm";
+            stateDoc["state"] = alarmState;
+            serializeJson(stateDoc, stateMsg);
+            webSocket.sendTXT(num, stateMsg);
+
+            stateDoc.clear();
+            stateMsg = "";
+            stateDoc["type"] = "doors";
+            stateDoc["state"] = doorState;
+            serializeJson(stateDoc, stateMsg);
+            webSocket.sendTXT(num, stateMsg);
+
+            stateDoc.clear();
+            stateMsg = "";
+            stateDoc["type"] = "pin";
+            stateDoc["value"] = enteredPassword;
+            serializeJson(stateDoc, stateMsg);
+            webSocket.sendTXT(num, stateMsg);
+        }
+        else if (text == "start")
+        {
+            if (!registrationActive)
             {
-                String text = String((char*)payload);
-                Serial.printf("[WebSocket] Received text from #%u: %s\n", num, text.c_str());
-
-                if (text == "refresh" || text == "getStates") {
-                    // Send current states
-                    DynamicJsonDocument stateDoc(256);
-                    String stateMsg;
-
-                    // Motion state
-                    stateDoc["type"] = "motion";
-                    stateDoc["state"] = motionState;
-                    stateDoc["time"] = motionDetectedTime;
-                    serializeJson(stateDoc, stateMsg);
-                    webSocket.sendTXT(num, stateMsg);
-
-                    // LED state
-                    stateDoc.clear();
-                    stateMsg = "";
-                    stateDoc["type"] = "led";
-                    stateDoc["state"] = ledState;
-                    serializeJson(stateDoc, stateMsg);
-                    webSocket.sendTXT(num, stateMsg);
-
-                    // Alarm state
-                    stateDoc.clear();
-                    stateMsg = "";
-                    stateDoc["type"] = "alarm";
-                    stateDoc["state"] = alarmState;
-                    serializeJson(stateDoc, stateMsg);
-                    webSocket.sendTXT(num, stateMsg);
-
-                    // Door state
-                    stateDoc.clear();
-                    stateMsg = "";
-                    stateDoc["type"] = "doors";
-                    stateDoc["state"] = doorState;
-                    serializeJson(stateDoc, stateMsg);
-                    webSocket.sendTXT(num, stateMsg);
-
-                    // PIN state
-                    stateDoc.clear();
-                    stateMsg = "";
-                    stateDoc["type"] = "pin";
-                    stateDoc["value"] = enteredPassword;
-                    serializeJson(stateDoc, stateMsg);
-                    webSocket.sendTXT(num, stateMsg);
-                } 
-                else if (text == "start") {
-                    if (!registrationActive) {
-                        startFingerprintRegistration();
-                    }
-                } 
-                else if (text == "cancel") {
-                    if (registrationActive) {
-                        resetRegistrationProcess();
-                        DynamicJsonDocument doc(128);
-                        doc["type"] = "cancel";
-                        doc["message"] = "Registration cancelled";
-                        String response;
-                        serializeJson(doc, response);
-                        webSocket.sendTXT(num, response);
-                    }
-                }
+                startFingerprintRegistration();
             }
-            break;
-
-        case WStype_ERROR:
-            Serial.printf("[WebSocket] Error from client #%u\n", num);
-            if (num < MAX_CLIENTS) {
-                clientConnected[num] = false;
-                if (connectedClients > 0) {
-                    connectedClients--;
-                }
+        }
+        else if (text == "cancel")
+        {
+            if (registrationActive)
+            {
+                resetRegistrationProcess();
+                DynamicJsonDocument doc(128);
+                doc["type"] = "cancel";
+                doc["message"] = "Registration cancelled";
+                String response;
+                serializeJson(doc, response);
+                webSocket.sendTXT(num, response);
             }
-            break;
+        }
+    }
+    break;
 
-        case WStype_PING:
-            Serial.printf("[WebSocket] Ping from client #%u\n", num);
-            break;
+    case WStype_ERROR:
+        Serial.printf("[WebSocket] Error from client #%u\n", num);
+        if (num < MAX_CLIENTS)
+        {
+            clientConnected[num] = false;
+            if (connectedClients > 0)
+            {
+                connectedClients--;
+            }
+        }
+        break;
 
-        case WStype_PONG:
-            Serial.printf("[WebSocket] Pong from client #%u\n", num);
-            break;
+    case WStype_PING:
+        Serial.printf("[WebSocket] Ping from client #%u\n", num);
+        break;
+
+    case WStype_PONG:
+        Serial.printf("[WebSocket] Pong from client #%u\n", num);
+        break;
     }
 }
 
-
-void setupWebSocketRoutes() {
-    server.on("/ws-info", HTTP_GET, []() {
+void setupWebSocketRoutes()
+{
+    server.on("/ws-info", HTTP_GET, []()
+              {
         String info = "WebSocket Server Info:\n";
         info += "Server IP: " + WiFi.localIP().toString() + "\n";
         info += "Server Port: 81\n";
         info += "Connected Clients: " + String(webSocket.connectedClients()) + "\n";
         info += "WiFi Status: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "\n";
         info += "RSSI: " + String(WiFi.RSSI()) + " dBm\n";
-        server.send(200, "text/plain", info);
-    });
+        server.send(200, "text/plain", info); });
 }
 
-
-void handleWebSocket() {
+void handleWebSocket()
+{
     unsigned long currentMillis = millis();
-    
+
     webSocket.loop();
-    
-    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
+
+    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL)
+    {
         Serial.println("\n=== WebSocket Server Status ===");
         Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
         Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
         Serial.printf("IP Address: %s\n", WiFi.localIP().toString().c_str());
         Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
-        if (registrationActive) {
+        if (registrationActive)
+        {
             Serial.println("Registration is active");
             Serial.printf("Current Step: %d\n", currentStep);
         }
         Serial.println("============================\n");
         lastDebugPrint = currentMillis;
     }
-    
-    if (currentMillis - lastPing > 15000) {
+
+    if (currentMillis - lastPing > 15000)
+    {
         webSocket.broadcastPing();
         lastPing = currentMillis;
     }
 }
 
-String urlEncode(String str) {
-  String encodedString = "";
-  char c;
-  for (unsigned int i = 0; i < str.length(); i++) {
-    c = str.charAt(i);
-    if (isalnum(c)) {
-      encodedString += c;
-    } else {
-      encodedString += '%';
-      char code0 = (c >> 4) & 0xF;
-      char code1 = c & 0xF;
-      code0 += code0 > 9 ? 'A' - 10 : '0';
-      code1 += code1 > 9 ? 'A' - 10 : '0';
-      encodedString += code0;
-      encodedString += code1;
+String urlEncode(String str)
+{
+    String encodedString = "";
+    char c;
+    for (unsigned int i = 0; i < str.length(); i++)
+    {
+        c = str.charAt(i);
+        if (isalnum(c))
+        {
+            encodedString += c;
+        }
+        else
+        {
+            encodedString += '%';
+            char code0 = (c >> 4) & 0xF;
+            char code1 = c & 0xF;
+            code0 += code0 > 9 ? 'A' - 10 : '0';
+            code1 += code1 > 9 ? 'A' - 10 : '0';
+            encodedString += code0;
+            encodedString += code1;
+        }
     }
-  }
-  return encodedString;
+    return encodedString;
 }
 
-String urlDecode(String str) {
-  String decoded = "";
-  char c;
-  int i, len = str.length();
-  for (i = 0; i < len; i++) {
-    c = str.charAt(i);
-    if (c == '+') {
-      decoded += ' ';
-    } else if (c == '%' && i + 2 < len) {
-      char code0 = str.charAt(++i);
-      char code1 = str.charAt(++i);
-      c = (hexToInt(code0) << 4) | hexToInt(code1);
-      decoded += c;
-    } else {
-      decoded += c;
+String urlDecode(String str)
+{
+    String decoded = "";
+    char c;
+    int i, len = str.length();
+    for (i = 0; i < len; i++)
+    {
+        c = str.charAt(i);
+        if (c == '+')
+        {
+            decoded += ' ';
+        }
+        else if (c == '%' && i + 2 < len)
+        {
+            char code0 = str.charAt(++i);
+            char code1 = str.charAt(++i);
+            c = (hexToInt(code0) << 4) | hexToInt(code1);
+            decoded += c;
+        }
+        else
+        {
+            decoded += c;
+        }
     }
-  }
-  return decoded;
+    return decoded;
 }
 
-int hexToInt(char c) {
-  if ('0' <= c && c <= '9') return c - '0';
-  if ('a' <= c && c <= 'f') return c - 'a' + 10;
-  if ('A' <= c && c <= 'F') return c - 'A' + 10;
-  return 0;
+int hexToInt(char c)
+{
+    if ('0' <= c && c <= '9')
+        return c - '0';
+    if ('a' <= c && c <= 'f')
+        return c - 'a' + 10;
+    if ('A' <= c && c <= 'F')
+        return c - 'A' + 10;
+    return 0;
 }
 
-
-
-//void sendAllStatusesToClient(uint8_t clientNum) {
-//  String ledStatusMsg = "{\"type\":\"led\",\"state\":" + String(ledState ? "true" : "false") + "}";
-//  String motionStatusMsg = "{\"type\":\"motion\",\"state\":" + String(motionState ? "true" : "false") + ", \"time\":\"" + motionDetectedTime + "\"}";
-//  String alarmStatusMsg = "{\"type\":\"alarm\",\"state\":" + String(alarmState ? "true" : "false") + "}";
-//  String doorStatusMsg = "{\"type\":\"doors\",\"state\":" + String(doorState ? "true" : "false") + "}";
-//  String pinStatusMsg = "{\"type\":\"pin\",\"value\":\"" + enteredPassword + "\"}";
-//
-//  webSocket.sendTXT(clientNum, ledStatusMsg);
-//  webSocket.sendTXT(clientNum, motionStatusMsg);
-//  webSocket.sendTXT(clientNum, alarmStatusMsg);
-//  webSocket.sendTXT(clientNum, doorStatusMsg);
-//  webSocket.sendTXT(clientNum, pinStatusMsg);
-//}
-
-String getFormattedTime() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    return "Failed to obtain time";
-  }
-  char timeStr[16];
-  strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
-  return String(timeStr);
+String getFormattedTime()
+{
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo))
+    {
+        return "Failed to obtain time";
+    }
+    char timeStr[16];
+    strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+    return String(timeStr);
 }
 
-int getFingerprintID() {
-    if (!firstStepVerified) {
+int getFingerprintID()
+{
+    if (!firstStepVerified)
+    {
         int fingerprintID = finger.getImage();
-        if (fingerprintID == FINGERPRINT_OK) {
+        if (fingerprintID == FINGERPRINT_OK)
+        {
             fingerprintID = finger.image2Tz();
-            if (fingerprintID == FINGERPRINT_OK) {
+            if (fingerprintID == FINGERPRINT_OK)
+            {
                 fingerprintID = finger.fingerFastSearch();
-                if (fingerprintID == FINGERPRINT_OK) {
-                    for (User &user : users) {
-                        if (user.fingerprintID == String(finger.fingerID)) {
+                if (fingerprintID == FINGERPRINT_OK)
+                {
+                    for (User &user : users)
+                    {
+                        if (user.fingerprintID == String(finger.fingerID))
+                        {
                             authenticatedUser = &user;
                             firstStepVerified = true;
                             expectedVoiceCommand = user.voiceCommand;
-                            
+
                             display.clearDisplay();
                             display.setCursor(0, 0);
                             display.println("Say wake word:");
                             display.println("'hello robot'");
                             display.display();
-                            
+
                             return finger.fingerID;
                         }
                     }
@@ -683,7 +696,8 @@ int getFingerprintID() {
     return -1;
 }
 
-void resetPIRDetection() {
+void resetPIRDetection()
+{
     digitalWrite(ledPin, LOW);
     ledState = false;
     digitalWrite(blueLedPin, LOW);
@@ -695,7 +709,6 @@ void resetPIRDetection() {
     motionDetectedTime = "";
     motionState = false;
 
-    // Create and send all state updates
     DynamicJsonDocument ledDoc(200);
     ledDoc["type"] = "led";
     ledDoc["state"] = false;
@@ -725,7 +738,6 @@ void resetPIRDetection() {
     serializeJson(alarmDoc, alarmMsg);
     webSocket.broadcastTXT(alarmMsg);
 
-    // Update OLED display
     display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(0, 0);
@@ -735,60 +747,56 @@ void resetPIRDetection() {
     Serial.println("All states reset and broadcast");
 }
 
-// Funkcija koja prikazuje poruku "Welcome home (ime korisnika)" na OLED-u
-void displayWelcomeMessage(String username) {
+void displayWelcomeMessage(String username)
+{
     display.clearDisplay();
     display.setTextSize(1);
-    
-    // Display "Welcome"
-    display.setCursor((SCREEN_WIDTH - 7 * 6) / 2, 10);  // Center "Welcome"
+
+    display.setCursor((SCREEN_WIDTH - 7 * 6) / 2, 10);
     display.print("Welcome");
-    
-    // Display "home"
-    display.setCursor((SCREEN_WIDTH - 4 * 6) / 2, 25);  // Center "home"
+
+    display.setCursor((SCREEN_WIDTH - 4 * 6) / 2, 25);
     display.print("home");
-    
-    // Display username
-    display.setCursor((SCREEN_WIDTH - username.length() * 6) / 2, 40);  // Center username
+
+    display.setCursor((SCREEN_WIDTH - username.length() * 6) / 2, 40);
     display.print(username);
-    
+
     display.display();
 }
 
-
-void moveServo() {
+void moveServo()
+{
     Serial.println("Moving servo - Opening door");
     doorState = true;
     broadcastState("doors", doorState);
-    
-    // Open door
-    for (pos = 0; pos <= 180; pos += 1) {
+
+    for (pos = 0; pos <= 180; pos += 1)
+    {
         myservo.write(pos);
     }
-    
-    // Keep door open briefly
+
     delay(2000);
-    
-    // Close door
-    for (pos = 180; pos >= 0; pos -= 1) {
+
+    for (pos = 180; pos >= 0; pos -= 1)
+    {
         myservo.write(pos);
     }
-    
+
     doorState = false;
     broadcastState("doors", doorState);
     Serial.println("Door movement complete");
 }
 
-
-// Funkcija za unos PIN-a
-void handlePasswordInput() {
+void handlePasswordInput()
+{
     char key = keypad.getKey();
 
-    // Only process input if not already verified and key is pressed
-    if (key && !firstStepVerified) {
-        // Check if motion was detected first
-        if (!isEnteringPin && !motionDetected) {
-            // If no motion detected, ignore input
+    if (key && !firstStepVerified)
+    {
+
+        if (!isEnteringPin && !motionDetected)
+        {
+
             display.clearDisplay();
             display.setTextSize(1);
             display.setCursor(0, 0);
@@ -796,8 +804,7 @@ void handlePasswordInput() {
             display.println("required first!");
             display.display();
             delay(2000);
-            
-            // Reset display to waiting for motion message
+
             display.clearDisplay();
             display.setCursor(0, 0);
             display.println("Waiting for motion...");
@@ -805,47 +812,48 @@ void handlePasswordInput() {
             return;
         }
 
-        // If this is the first key press after motion detection
-        if (!isEnteringPin) {
+        if (!isEnteringPin)
+        {
             isEnteringPin = true;
             isWaitingForMotion = false;
             digitalWrite(ledPin, HIGH);
             ledState = true;
             broadcastState("led", true);
-            
-            // Clear display and show initial PIN entry screen
+
             display.clearDisplay();
             display.setCursor(0, 0);
             display.print("Enter PIN:");
             display.display();
         }
 
-        // Handle PIN entry
-        if (key == '#') {
-            // Check PIN against registered users
-            for (User &user : users) {
-                if (user.pin == enteredPassword) {
+        if (key == '#')
+        {
+
+            for (User &user : users)
+            {
+                if (user.pin == enteredPassword)
+                {
                     authenticatedUser = &user;
                     firstStepVerified = true;
                     expectedVoiceCommand = user.voiceCommand;
-                    
+
                     Serial.println("Correct PIN!");
-                    
+
                     display.clearDisplay();
                     display.setCursor(0, 0);
                     display.println("Say wake word:");
                     display.println("'hello robot'");
                     display.display();
-                    
+
                     enteredPassword = "";
                     updatePINState("");
                     return;
                 }
             }
 
-            // Handle incorrect PIN
             attempts++;
-            if (attempts >= maxAttempts) {
+            if (attempts >= maxAttempts)
+            {
                 Serial.println("Too many failed attempts!");
                 digitalWrite(blueLedPin, HIGH);
                 alarmState = true;
@@ -853,7 +861,9 @@ void handlePasswordInput() {
                 sendTelegramMessage("Warning: Multiple failed PIN attempts detected!");
                 delay(3000);
                 resetPIRDetection();
-            } else {
+            }
+            else
+            {
                 Serial.println("Incorrect PIN!");
                 display.clearDisplay();
                 display.setCursor(0, 0);
@@ -862,41 +872,47 @@ void handlePasswordInput() {
                 display.printf("Attempts left: %d", maxAttempts - attempts);
                 display.display();
                 delay(2000);
-                
+
                 display.clearDisplay();
                 display.setCursor(0, 0);
                 display.print("Enter PIN:");
                 display.display();
             }
-            
+
             enteredPassword = "";
             updatePINState("");
-            
-        } else if (key == '*') {
-            // Handle backspace
-            if (enteredPassword.length() > 0) {
+        }
+        else if (key == '*')
+        {
+
+            if (enteredPassword.length() > 0)
+            {
                 enteredPassword.remove(enteredPassword.length() - 1);
                 updatePINState(enteredPassword);
-                
+
                 display.clearDisplay();
                 display.setCursor(0, 0);
                 display.print("Enter PIN:");
                 display.setCursor(0, 20);
-                for (int i = 0; i < enteredPassword.length(); i++) {
+                for (int i = 0; i < enteredPassword.length(); i++)
+                {
                     display.print("*");
                 }
                 display.display();
             }
-        } else {
-            // Add new digit to PIN
+        }
+        else
+        {
+
             enteredPassword += key;
             updatePINState(enteredPassword);
-            
+
             display.clearDisplay();
             display.setCursor(0, 0);
             display.print("Enter PIN:");
             display.setCursor(0, 20);
-            for (int i = 0; i < enteredPassword.length(); i++) {
+            for (int i = 0; i < enteredPassword.length(); i++)
+            {
                 display.print("*");
             }
             display.display();
@@ -904,15 +920,18 @@ void handlePasswordInput() {
     }
 }
 
-void handlePIRSensor() {
+void handlePIRSensor()
+{
     int pirState = digitalRead(pirPin);
     unsigned long currentTime = millis();
 
-    if (pirState != lastPirState) {
+    if (pirState != lastPirState)
+    {
         lastPirReadTime = currentTime;
     }
 
-    if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion) {
+    if ((currentTime - lastPirReadTime) > pirDebounceDelay && pirState == HIGH && isWaitingForMotion)
+    {
         Serial.println("Motion detected!");
         String detectionTime = getFormattedTime();
         motionDetectedTime = detectionTime;
@@ -939,62 +958,63 @@ void handlePIRSensor() {
         authenticatedUser = nullptr;
     }
 
-    if (ledState && (currentTime - ledTurnOnTime > ledOnTimeout)) {
+    if (ledState && (currentTime - ledTurnOnTime > ledOnTimeout))
+    {
         resetPIRDetection();
     }
 
     lastPirState = pirState;
 }
 
-
-
-
-void activateErrorLED() {
+void activateErrorLED()
+{
     digitalWrite(blueLedPin, HIGH);
     alarmState = true;
 
-    // Broadcast alarm activation
     broadcastState("alarm", alarmState);
 
     sendTelegramMessage("Alarm activated!");
     delay(5000);
-    
+
     digitalWrite(blueLedPin, LOW);
     alarmState = false;
 
-    // Broadcast alarm deactivation
     broadcastState("alarm", alarmState);
 }
 
-
-
-// Generiše novi ID ako nije zauzet
-int generateNewFingerprintID() {
-    for (int id = 1; id <= finger.capacity; id++) {
-        if (checkIDAvailability(id)) {
-            return id;  // Prvi slobodan ID
+int generateNewFingerprintID()
+{
+    for (int id = 1; id <= finger.capacity; id++)
+    {
+        if (checkIDAvailability(id))
+        {
+            return id;
         }
     }
     Serial.println("No available IDs!");
-    return -1;  // Nema slobodnih ID-eva
+    return -1;
 }
 
-void cleanupOrphanedFingerprints() {
+void cleanupOrphanedFingerprints()
+{
     Serial.println("Cleaning up orphaned fingerprints...");
-    
-    // First get all IDs that are actually in use by users
+
     std::vector<int> usedIDs;
-    for (const User& user : users) {
-        if (!user.fingerprintID.isEmpty()) {
+    for (const User &user : users)
+    {
+        if (!user.fingerprintID.isEmpty())
+        {
             usedIDs.push_back(user.fingerprintID.toInt());
         }
     }
-    
-    // Check each ID in the sensor
-    for (int id = 1; id <= finger.capacity; id++) {
-        if (finger.loadModel(id) == FINGERPRINT_OK) {
-            // If this ID exists in sensor but not in users list, delete it
-            if (std::find(usedIDs.begin(), usedIDs.end(), id) == usedIDs.end()) {
+
+    for (int id = 1; id <= finger.capacity; id++)
+    {
+        if (finger.loadModel(id) == FINGERPRINT_OK)
+        {
+
+            if (std::find(usedIDs.begin(), usedIDs.end(), id) == usedIDs.end())
+            {
                 Serial.printf("Deleting orphaned fingerprint ID: %d\n", id);
                 finger.deleteModel(id);
             }
@@ -1003,42 +1023,47 @@ void cleanupOrphanedFingerprints() {
     Serial.println("Cleanup complete");
 }
 
-
-
-bool checkIDAvailability(int id) {
+bool checkIDAvailability(int id)
+{
     uint8_t p = finger.loadModel(id);
-    if (p == FINGERPRINT_OK) {
+    if (p == FINGERPRINT_OK)
+    {
         Serial.println("ID " + String(id) + " is occupied.");
         return false;
-    } else {
+    }
+    else
+    {
         Serial.println("ID " + String(id) + " is available.");
         return true;
     }
 }
 
-bool isIDInUse(int id) {
-    for (const User &user : users) {
-        if (user.fingerprintID.toInt() == id) {
+bool isIDInUse(int id)
+{
+    for (const User &user : users)
+    {
+        if (user.fingerprintID.toInt() == id)
+        {
             return true;
         }
     }
     return false;
 }
 
+void assignFingerprintID()
+{
+    if (!isAssigningId || idAssigned)
+        return;
 
-
-void assignFingerprintID() {
-    if (!isAssigningId || idAssigned) return;
-    
     Serial.println("Starting ID assignment...");
     static unsigned long lastProgressUpdate = 0;
     static int stepProgress = 0;
-    
-    // Update animation while assigning ID
-    if (millis() - lastProgressUpdate > 200) {
+
+    if (millis() - lastProgressUpdate > 200)
+    {
         stepProgress = (stepProgress + 10) % 100;
-        int mappedProgress = stepProgress * 25 / 100;  // Map to 0-25% range
-        
+        int mappedProgress = stepProgress * 25 / 100;
+
         DynamicJsonDocument doc(200);
         doc["type"] = "progress";
         doc["step"] = 0;
@@ -1051,73 +1076,75 @@ void assignFingerprintID() {
         lastProgressUpdate = millis();
     }
 
-    // Check and release any previously assigned ID that wasn't completed
-    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete) {
-        Serial.printf("Found incomplete registration with ID %d, releasing it...\n", 
-            currentRegistration.assignedID);
+    if (currentRegistration.assignedID > 0 && !currentRegistration.registrationComplete)
+    {
+        Serial.printf("Found incomplete registration with ID %d, releasing it...\n",
+                      currentRegistration.assignedID);
         finger.deleteModel(currentRegistration.assignedID);
         currentRegistration.assignedID = -1;
     }
-    
-    // First check if we have a previous incomplete registration
-    if (fingerprintID > 0 && !isIDInUse(fingerprintID)) {
-        // Try to reuse the previous ID
+
+    if (fingerprintID > 0 && !isIDInUse(fingerprintID))
+    {
+
         uint8_t p = finger.loadModel(fingerprintID);
-        if (p == FINGERPRINT_OK) {
-            // Successfully found and can reuse the ID
+        if (p == FINGERPRINT_OK)
+        {
+
             idAssigned = true;
             isAssigningId = false;
             currentRegistration.assignedID = fingerprintID;
             currentRegistration.registrationComplete = false;
             currentRegistration.startTime = millis();
-            
+
             DynamicJsonDocument doc(200);
             doc["type"] = "progress";
             doc["step"] = 0;
             doc["animate"] = false;
-            doc["progressValue"] = 25;  // Complete ID assignment phase
+            doc["progressValue"] = 25;
             doc["message"] = "Previous ID reassigned successfully!";
             String response;
             serializeJson(doc, response);
             webSocket.broadcastTXT(response);
-            
+
             Serial.printf("Reusing previous Fingerprint ID: %d\n", fingerprintID);
             return;
         }
     }
-    
-    // If no previous ID to reuse, find the first available slot
-    for (int id = 1; id <= finger.capacity; id++) {
-        if (!isIDInUse(id)) {  // First check if ID is not used by any registered user
+
+    for (int id = 1; id <= finger.capacity; id++)
+    {
+        if (!isIDInUse(id))
+        {
             uint8_t p = finger.loadModel(id);
-            if (p != FINGERPRINT_OK) {  // Then check if ID slot is empty in the sensor
+            if (p != FINGERPRINT_OK)
+            {
                 fingerprintID = id;
                 currentRegistration.assignedID = id;
                 currentRegistration.registrationComplete = false;
                 currentRegistration.startTime = millis();
-                
+
                 idAssigned = true;
                 isAssigningId = false;
-                
+
                 DynamicJsonDocument doc(200);
                 doc["type"] = "progress";
                 doc["step"] = 0;
                 doc["animate"] = false;
-                doc["progressValue"] = 25;  // Complete ID assignment phase
+                doc["progressValue"] = 25;
                 doc["message"] = "New fingerprint ID assigned!";
                 String response;
                 serializeJson(doc, response);
                 webSocket.broadcastTXT(response);
-                
+
                 Serial.printf("Assigned new Fingerprint ID: %d\n", fingerprintID);
                 return;
             }
         }
     }
-    
-    // If we get here, no IDs are available
+
     Serial.println("No available fingerprint IDs!");
-    
+
     DynamicJsonDocument doc(200);
     doc["type"] = "progress";
     doc["step"] = 0;
@@ -1127,36 +1154,42 @@ void assignFingerprintID() {
     String response;
     serializeJson(doc, response);
     webSocket.broadcastTXT(response);
-    
-    // Reset the registration process
+
     resetRegistrationProcess();
 }
 
-void refreshFingerprintIDs() {
+void refreshFingerprintIDs()
+{
     Serial.println("Refreshing fingerprint IDs...");
-    for (int id = 1; id <= finger.capacity; id++) {
+    for (int id = 1; id <= finger.capacity; id++)
+    {
         int p = finger.loadModel(id);
-        if (p == FINGERPRINT_OK) {
+        if (p == FINGERPRINT_OK)
+        {
             Serial.println("ID " + String(id) + " is occupied.");
-        } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
+        }
+        else if (p == FINGERPRINT_PACKETRECIEVEERR)
+        {
             Serial.println("Error reading ID " + String(id));
-        } else {
+        }
+        else
+        {
             Serial.println("ID " + String(id) + " is available.");
         }
     }
 }
 
+void sendProgressUpdate(int step, const String &message)
+{
+    if (!registrationActive)
+        return;
 
-void sendProgressUpdate(int step, const String& message) {
-    if (!registrationActive) return;
-
-    // Fix: For step 3 (completion), we should always use 100%
     int progressValue = (step == 3) ? 100 : mapProgress(0, step);
-    
+
     DynamicJsonDocument doc(1024);
     doc["type"] = "progress";
     doc["step"] = step;
-    doc["progressValue"] = progressValue;  // This will now be 100% for step 3
+    doc["progressValue"] = progressValue;
     doc["animate"] = false;
     doc["message"] = message;
 
@@ -1165,100 +1198,109 @@ void sendProgressUpdate(int step, const String& message) {
     Serial.print("Sending progress update: ");
     Serial.println(json);
 
-    if (webSocket.connectedClients() > 0) {
+    if (webSocket.connectedClients() > 0)
+    {
         webSocket.broadcastTXT(json);
     }
 }
 
+int mapProgress(int stepProgress, int stepNumber)
+{
 
-int mapProgress(int stepProgress, int stepNumber) {
-    // If it's the final step, always return 100%
-    if (stepNumber == 3) return 100;
-    
+    if (stepNumber == 3)
+        return 100;
+
     const int RANGES[4][2] = {
-        {0, 25},    // Step 0: ID Assignment (Ends at 25%)
-        {25, 50},   // Step 1: First Scan (Starts at 25%, Ends at 50%)
-        {50, 75},   // Step 2: Second Scan
-        {75, 100}   // Step 3: Completion
-    };
-    
+        {0, 25},
+        {25, 50},
+        {50, 75},
+        {75, 100}};
+
     int rangeStart = RANGES[stepNumber][0];
     int rangeEnd = RANGES[stepNumber][1];
     return rangeStart + (stepProgress * (rangeEnd - rangeStart) / 100);
 }
 
-
-// Prvo skeniranje otiska
-bool getFingerprintImage() {
+bool getFingerprintImage()
+{
     int p = finger.getImage();
     static int scanAttempts = 0;
 
-    switch (p) {
-        case FINGERPRINT_OK:
-            scanAttempts++;
-            if (scanAttempts >= 3) {
-                scanAttempts = 0;
-                if (finger.image2Tz(1) == FINGERPRINT_OK) {
-                    sendProgressUpdate(1, "First scan successful!");
-                    return true;
-                }
-            }
-            break;
-        case FINGERPRINT_NOFINGER:
+    switch (p)
+    {
+    case FINGERPRINT_OK:
+        scanAttempts++;
+        if (scanAttempts >= 3)
+        {
             scanAttempts = 0;
-            break;
-        default:
-            sendProgressUpdate(1, "Scan error, please try again");
-            delay(2000);
-            break;
+            if (finger.image2Tz(1) == FINGERPRINT_OK)
+            {
+                sendProgressUpdate(1, "First scan successful!");
+                return true;
+            }
+        }
+        break;
+    case FINGERPRINT_NOFINGER:
+        scanAttempts = 0;
+        break;
+    default:
+        sendProgressUpdate(1, "Scan error, please try again");
+        delay(2000);
+        break;
     }
     return false;
 }
 
-
-// Drugo skeniranje otiska
-bool confirmSecondScan() {
+bool confirmSecondScan()
+{
     static bool waitingForFingerRemoval = true;
-    static int stepProgress = 50; // Start of second scan progress range (50%)
+    static int stepProgress = 50;
     static unsigned long lastProgressUpdate = 0;
 
-    // Step 1: Ensure the finger is removed before starting the second scan
-    if (waitingForFingerRemoval) {
-        if (finger.getImage() == FINGERPRINT_NOFINGER) {
+    if (waitingForFingerRemoval)
+    {
+        if (finger.getImage() == FINGERPRINT_NOFINGER)
+        {
             waitingForFingerRemoval = false;
-            stepProgress = 50; // Reset to start of second scan progress
+            stepProgress = 50;
             sendProgressUpdate(2, "Now place your finger again for the second scan");
-            delay(1000); // Give user time to react
+            delay(1000);
             return false;
         }
-        return false; // Still waiting for finger removal
+        return false;
     }
 
-    // Step 2: Wait for the user to place their finger for the second scan
-    if (finger.getImage() == FINGERPRINT_OK) {
-        // Finger detected, process the image
-        if (finger.image2Tz(2) == FINGERPRINT_OK) {
-            if (finger.createModel() == FINGERPRINT_OK) {
-                // Scans match, second scan successful
+    if (finger.getImage() == FINGERPRINT_OK)
+    {
+
+        if (finger.image2Tz(2) == FINGERPRINT_OK)
+        {
+            if (finger.createModel() == FINGERPRINT_OK)
+            {
+
                 sendProgressUpdate(2, "Second scan successful! Matching scans...");
-                return true; // Proceed to the next step
-            } else {
-                // Scans don't match, restart process
-                waitingForFingerRemoval = true; // Reset for next attempt
+                return true;
+            }
+            else
+            {
+
+                waitingForFingerRemoval = true;
                 sendProgressUpdate(1, "Scans don't match. Restarting first scan...");
-                currentStep = 1; // Return to step 1
+                currentStep = 1;
                 delay(2000);
             }
-        } else {
+        }
+        else
+        {
             sendProgressUpdate(2, "Error during second scan. Please try again.");
             delay(2000);
         }
         return false;
     }
 
-    // Step 3: Update progress animation while waiting for the finger
-    if (millis() - lastProgressUpdate > 200) {
-        stepProgress = stepProgress < 75 ? stepProgress + 1 : 75; // Increment progress to max 75%
+    if (millis() - lastProgressUpdate > 200)
+    {
+        stepProgress = stepProgress < 75 ? stepProgress + 1 : 75;
         DynamicJsonDocument doc(200);
         doc["type"] = "progress";
         doc["step"] = 2;
@@ -1271,19 +1313,19 @@ bool confirmSecondScan() {
         lastProgressUpdate = millis();
     }
 
-    return false; // Waiting for valid second scan
+    return false;
 }
 
-
-
-
-bool getFingerprintAdded() {
-    if (!SPIFFS.exists("/fingerprintAdded.txt")) {
+bool getFingerprintAdded()
+{
+    if (!SPIFFS.exists("/fingerprintAdded.txt"))
+    {
         Serial.println("Fingerprint status file does not exist. Returning false.");
         return false;
     }
     File file = SPIFFS.open("/fingerprintAdded.txt", FILE_READ);
-    if (!file) {
+    if (!file)
+    {
         Serial.println("Failed to open file for reading");
         return false;
     }
@@ -1294,43 +1336,43 @@ bool getFingerprintAdded() {
     return value == "true";
 }
 
-
-
-bool saveFingerprint() {
+bool saveFingerprint()
+{
     int p = finger.storeModel(fingerprintID);
-    if (p == FINGERPRINT_OK) {
+    if (p == FINGERPRINT_OK)
+    {
         Serial.println("Fingerprint stored successfully.");
         fingerprintAdded = true;
         saveFingerprintAdded(true);
-           
-        // Mark this registration as complete
+
         currentRegistration.registrationComplete = true;
-        
-        // Send final completion message
+
         DynamicJsonDocument doc(200);
         doc["type"] = "progress";
         doc["step"] = 3;
         doc["animate"] = false;
-        doc["progressValue"] = 100; // Full completion
+        doc["progressValue"] = 100;
         doc["message"] = "Registration complete!";
         String response;
         serializeJson(doc, response);
         webSocket.broadcastTXT(response);
-        
+
         Serial.println("Saved fingerprintAdded as true in SPIFFS");
         refreshFingerprintIDs();
         return true;
-    } else {
+    }
+    else
+    {
         Serial.println("Error storing fingerprint.");
-        // Registration failed, release the ID
+
         finger.deleteModel(fingerprintID);
         currentRegistration.assignedID = -1;
         return false;
     }
 }
 
-
-void handleGetFingerprintStatus() {
+void handleGetFingerprintStatus()
+{
     DynamicJsonDocument jsonResponse(1024);
     jsonResponse["fingerprintAdded"] = getFingerprintAdded();
     String response;
@@ -1338,132 +1380,145 @@ void handleGetFingerprintStatus() {
     server.send(200, "application/json", response);
 }
 
+void handleResetFingerprintStatus()
+{
+    if (!registrationActive)
+    {
 
-void handleResetFingerprintStatus() {
-    if (!registrationActive) {
-        // Only reset if we're starting a new registration
         fingerprintAdded = false;
         saveFingerprintAdded(false);
         Serial.println("Fingerprint status reset before new registration.");
         server.send(200, "application/json", "{\"success\": true}");
-    } else {
+    }
+    else
+    {
         Serial.println("Fingerprint reset prevented - registration active.");
         server.send(200, "application/json", "{\"success\": false, \"message\": \"Registration in progress\"}");
     }
 }
 
-
-// Funkcija za resetovanje napretka ako korisnik ne uspe
-void resetProgress() {
+void resetProgress()
+{
     Serial.println("Process failed. Restarting...");
     currentStep = 0;
 }
 
+void initializeUserFile()
+{
+    Serial.println("Initializing user file...");
 
-// Funkcija za inicijalizaciju fajla sa korisnicima
-void initializeUserFile() {
-  Serial.println("Initializing user file...");
-  
-  if (!SPIFFS.exists("/users.txt")) {
-    // Kreiraj fajl ako ne postoji i dodaj admin/admin korisnika
-    File file = SPIFFS.open("/users.txt", "w");
-    if (!file) {
-      Serial.println("Greška pri kreiranju fajla za korisnike");
-      return;
+    if (!SPIFFS.exists("/users.txt"))
+    {
+
+        File file = SPIFFS.open("/users.txt", "w");
+        if (!file)
+        {
+            Serial.println("Greška pri kreiranju fajla za korisnike");
+            return;
+        }
+
+        file.println("admin,admin,,");
+        file.close();
+        Serial.println("Kreiran fajl sa default admin korisnikom");
     }
+    else
+    {
+        Serial.println("User file already exists.");
+        bool adminExists = false;
+        File file = SPIFFS.open("/users.txt", "r");
+        while (file.available())
+        {
+            String line = file.readStringUntil('\n');
+            line.trim();
+            if (line.startsWith("admin,"))
+            {
+                adminExists = true;
+                break;
+            }
+        }
+        file.close();
 
-    // Dodaj default admin korisnika u fajl sa samo username-om i pin-om
-    file.println("admin,admin,,"); // Prazna polja za fingerprintID i voiceCommand
-    file.close();
-    Serial.println("Kreiran fajl sa default admin korisnikom");
-  } else {
-    Serial.println("User file already exists.");
-    bool adminExists = false;
-    File file = SPIFFS.open("/users.txt", "r");
-    while (file.available()) {
-      String line = file.readStringUntil('\n');
-      line.trim();  // Ukloni prazne prostore
-      if (line.startsWith("admin,")) {
-        adminExists = true;
-        break;
-      }
+        if (!adminExists)
+        {
+            File file = SPIFFS.open("/users.txt", "a");
+            file.println("admin,admin,,");
+            file.close();
+            Serial.println("Dodao admin korisnika u postojeći fajl");
+        }
     }
-    file.close();
-
-    // Ako admin ne postoji, dodaj ga u fajl
-    if (!adminExists) {
-      File file = SPIFFS.open("/users.txt", "a");
-      file.println("admin,admin,,"); // Correct format with extra commas
-      file.close();
-      Serial.println("Dodao admin korisnika u postojeći fajl");
-    }
-  }
-      Serial.println("Initialization complete.");
-
+    Serial.println("Initialization complete.");
 }
 
+void loadUsersFromFile()
+{
+    Serial.println("Loading users from file...");
 
-// Funkcija za učitavanje korisnika iz fajla
-void loadUsersFromFile() {
-      Serial.println("Loading users from file...");
+    File file = SPIFFS.open("/users.txt", FILE_READ);
+    if (!file)
+    {
+        Serial.println("Fajl sa korisnicima ne postoji");
+        return;
+    }
 
-  File file = SPIFFS.open("/users.txt", FILE_READ);
-  if (!file) {
-    Serial.println("Fajl sa korisnicima ne postoji");
-    return;
-  }
+    while (file.available())
+    {
+        String line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0)
+            continue;
 
-  while (file.available()) {
-    String line = file.readStringUntil('\n');
-    line.trim();
-    if (line.length() == 0) continue;
+        int commaIndex1 = line.indexOf(',');
+        int commaIndex2 = line.indexOf(',', commaIndex1 + 1);
+        int commaIndex3 = line.indexOf(',', commaIndex2 + 1);
 
-    int commaIndex1 = line.indexOf(',');
-    int commaIndex2 = line.indexOf(',', commaIndex1 + 1);
-    int commaIndex3 = line.indexOf(',', commaIndex2 + 1);
+        if (commaIndex1 > 0)
+        {
+            String username = line.substring(0, commaIndex1);
+            String pin;
+            String fingerprintID = "";
+            String voiceCommand = "";
 
-    if (commaIndex1 > 0) {
-      String username = line.substring(0, commaIndex1);
-      String pin;
-      String fingerprintID = "";
-      String voiceCommand = "";
+            if (commaIndex2 > commaIndex1)
+            {
+                pin = line.substring(commaIndex1 + 1, commaIndex2);
+            }
+            else
+            {
+                pin = line.substring(commaIndex1 + 1);
+            }
 
-      if (commaIndex2 > commaIndex1) {
-        pin = line.substring(commaIndex1 + 1, commaIndex2);
-      } else {
-        pin = line.substring(commaIndex1 + 1);
-      }
+            if (commaIndex2 > commaIndex1 && commaIndex3 > commaIndex2)
+            {
+                fingerprintID = line.substring(commaIndex2 + 1, commaIndex3);
+                voiceCommand = line.substring(commaIndex3 + 1);
+            }
+            else if (commaIndex2 > commaIndex1)
+            {
+                fingerprintID = line.substring(commaIndex2 + 1);
+            }
 
-      if (commaIndex2 > commaIndex1 && commaIndex3 > commaIndex2) {
-        fingerprintID = line.substring(commaIndex2 + 1, commaIndex3);
-        voiceCommand = line.substring(commaIndex3 + 1);
-      } else if (commaIndex2 > commaIndex1) {
-        fingerprintID = line.substring(commaIndex2 + 1);
-      }
-
-      users.push_back({username, pin, fingerprintID, voiceCommand});
-                  Serial.printf("Loaded user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
+            users.push_back({username, pin, fingerprintID, voiceCommand});
+            Serial.printf("Loaded user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
                           username.c_str(), pin.c_str(), fingerprintID.c_str(), voiceCommand.c_str());
-    } else {
-      Serial.println("Failed to parse line: " + line);
+        }
+        else
+        {
+            Serial.println("Failed to parse line: " + line);
+        }
     }
-  }
 
-  file.close();
-      Serial.println("Finished loading users.");
-
+    file.close();
+    Serial.println("Finished loading users.");
 }
 
-
-
-
-// Funkcija za dodavanje korisnika u fajl
-void saveUserToFile(const String& username, const String& pin, const String& fingerprintID, const String& voiceCommand) {
+void saveUserToFile(const String &username, const String &pin, const String &fingerprintID, const String &voiceCommand)
+{
     Serial.printf("Saving user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
                   username.c_str(), pin.c_str(), fingerprintID.c_str(), voiceCommand.c_str());
 
     File file = SPIFFS.open("/users.txt", FILE_APPEND);
-    if (!file) {
+    if (!file)
+    {
         Serial.println("Error opening user file for appending.");
         return;
     }
@@ -1473,19 +1528,17 @@ void saveUserToFile(const String& username, const String& pin, const String& fin
     Serial.println("User saved to file.");
 }
 
-
-
-
-// Funkcija za brisanje korisnika iz fajla
-void deleteUserFromFile(const String& usernameToDelete) {
+void deleteUserFromFile(const String &usernameToDelete)
+{
     Serial.println("Entered deleteUserFromFile function.");
 
     bool userFound = false;
     int fingerprintIDToDelete = -1;
 
-    // Search for the user in memory to find their fingerprint ID
-    for (User &u : users) {
-        if (u.username == usernameToDelete) {
+    for (User &u : users)
+    {
+        if (u.username == usernameToDelete)
+        {
             userFound = true;
             fingerprintIDToDelete = u.fingerprintID.toInt();
             Serial.println("Found user to delete: " + u.username);
@@ -1493,30 +1546,36 @@ void deleteUserFromFile(const String& usernameToDelete) {
         }
     }
 
-    if (!userFound) {
+    if (!userFound)
+    {
         Serial.println("User not found in memory, no action taken for deletion.");
         return;
     }
 
-    // Attempt to delete the fingerprint from the sensor
-    if (fingerprintIDToDelete >= 0) {
+    if (fingerprintIDToDelete >= 0)
+    {
         int deleteStatus = finger.deleteModel(fingerprintIDToDelete);
-        if (deleteStatus == FINGERPRINT_OK) {
+        if (deleteStatus == FINGERPRINT_OK)
+        {
             Serial.println("Fingerprint ID " + String(fingerprintIDToDelete) + " deleted successfully.");
-        } else {
+        }
+        else
+        {
             Serial.println("Failed to delete Fingerprint ID " + String(fingerprintIDToDelete) + ". Error code: " + String(deleteStatus));
         }
     }
 
-    // Remove the user from the users.txt file by creating a temporary file and excluding the target user
     File tempFile = SPIFFS.open("/users_temp.txt", "w");
-    if (!tempFile) {
+    if (!tempFile)
+    {
         Serial.println("Failed to open temporary file for writing.");
         return;
     }
 
-    for (User &u : users) {
-        if (u.username != usernameToDelete) {
+    for (User &u : users)
+    {
+        if (u.username != usernameToDelete)
+        {
             tempFile.println(u.username + "," + u.pin + "," + u.fingerprintID + "," + u.voiceCommand);
             Serial.println("Writing user to temp file: " + u.username);
         }
@@ -1524,50 +1583,58 @@ void deleteUserFromFile(const String& usernameToDelete) {
 
     tempFile.close();
 
-    // Replace users.txt with the updated file
-    if (SPIFFS.remove("/users.txt")) {
+    if (SPIFFS.remove("/users.txt"))
+    {
         Serial.println("Deleted original users.txt file.");
-    } else {
+    }
+    else
+    {
         Serial.println("Failed to delete original users.txt file.");
     }
 
-    if (SPIFFS.rename("/users_temp.txt", "/users.txt")) {
+    if (SPIFFS.rename("/users_temp.txt", "/users.txt"))
+    {
         Serial.println("Renamed temp file to users.txt successfully.");
-    } else {
+    }
+    else
+    {
         Serial.println("Failed to rename temp file to users.txt.");
     }
 
-    // Update the in-memory list by removing the deleted user
     users.erase(std::remove_if(users.begin(), users.end(),
-                [&](User &u) { return u.username == usernameToDelete; }), users.end());
+                               [&](User &u)
+                               { return u.username == usernameToDelete; }),
+                users.end());
 
     Serial.println("User " + usernameToDelete + " fully removed from memory and file.");
-    
+
     Serial.println("Refreshing fingerprint IDs after deletion...");
     refreshFingerprintIDs();
 
     Serial.println("Completed deleteUserFromFile function.");
 }
 
+void printUsersFile()
+{
+    File file = SPIFFS.open("/users.txt", "r");
+    if (!file)
+    {
+        Serial.println("Unable to open users.txt");
+        return;
+    }
 
-void printUsersFile() {
-  File file = SPIFFS.open("/users.txt", "r");
-  if (!file) {
-    Serial.println("Unable to open users.txt");
-    return;
-  }
-
-  Serial.println("Contents of users.txt:");
-  while (file.available()) {
-    String line = file.readStringUntil('\n');
-    Serial.println(line);
-  }
-  file.close();
+    Serial.println("Contents of users.txt:");
+    while (file.available())
+    {
+        String line = file.readStringUntil('\n');
+        Serial.println(line);
+    }
+    file.close();
 }
 
-// Funkcija za prikaz glavnog prozora sa dugmadima
-void showMainPage() {
-  String page = R"rawliteral(
+void showMainPage()
+{
+    String page = R"rawliteral(
     <html><head>
     <style>
     body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial; height: 100vh; margin: 0; display: flex; justify-content: center; align-items: center; }
@@ -1584,78 +1651,76 @@ void showMainPage() {
     </body></html>
     )rawliteral";
 
-  server.send(200, "text/html", page);
+    server.send(200, "text/html", page);
 }
 
+void showLoginPage()
+{
+    String message = "";
+    if (loginFailed)
+    {
+        message = "<p style='color:red; text-align:center;'>Wrong username or password!</p>";
+        loginFailed = false;
+    }
 
-// Funkcija za prikaz login prozora
-void showLoginPage() {
-  String message = "";
-  if (loginFailed) {
-    message = "<p style='color:red; text-align:center;'>Wrong username or password!</p>";
-    loginFailed = false;  // Resetuj status nakon prikaza poruke
-  }
-
-  // Postavljanje HTTP zaglavlja kako bi se onemogućilo keširanje
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "-1");
-
-  server.send(200, "text/html",
-              "<html><head>"
-              "<style>"
-              "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-              ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
-              ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
-              ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
-              ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
-              ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
-              ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
-              ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
-              "</style>"
-              "<script>"
-              "window.onload = function() {"
-              "  if (window.history && window.history.pushState) {"
-              "    window.history.pushState(null, '', window.location.href);"
-              "    window.onpopstate = function() {"
-              "      window.history.pushState(null, '', window.location.href);"
-              "    };"
-              "  }"
-              "};"
-              "</script>"
-              "</head><body>"
-              "<div class='login-container'>"
-              "<div class='login-box'>"
-              "<h1>Login</h1>"
-              "<form action='/login' method='POST'>"
-              "Username: <input type='text' name='username'><br>"
-              "Password: <input type='password' name='password'><br>"
-              "<input type='submit' value='Login'>"
-              "</form>"
-              "<a href='/' class='back-button'>Back to Main Page</a>"
-              + message +
-              "</div></div></body></html>");
-}
-
-
-
-// Funkcija za prikaz dodavanja korisnika
-void showUserPage() {
-  if (!loggedIn) {
-    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
+
     server.send(200, "text/html",
-                "<html><body><script>alert('Unauthorized access! Please log in.');</script>"
-                "<meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
-    return;
-  }
+                "<html><head>"
+                "<style>"
+                "body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+                ".login-container { display: flex; justify-content: center; align-items: center; height: 100vh; }"
+                ".login-box { background-color: #1A4D8A; padding: 60px; border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 255, 0.2); width: 400px; }"
+                ".login-box h1 { color: #00d4ff; text-align: center; margin-bottom: 30px; font-size: 24px; }"
+                ".login-box input { width: 100%; padding: 15px; margin: 15px 0; border: none; border-radius: 5px; font-size: 16px; }"
+                ".login-box input[type='text'], .login-box input[type='password'] { background-color: #112240; color: #ffffff; }"
+                ".login-box input[type='submit'], .back-button { width: 300px; padding: 15px; margin: 10px 0; background-color: #00d4ff; color: #ffffff; cursor: pointer; border-radius: 5px; font-size: 16px; text-align: center; text-decoration: none; display: block; margin-left: auto; margin-right: auto; }"
+                ".login-box input[type='submit']:hover, .back-button:hover { background-color: #00a3cc; }"
+                "</style>"
+                "<script>"
+                "window.onload = function() {"
+                "  if (window.history && window.history.pushState) {"
+                "    window.history.pushState(null, '', window.location.href);"
+                "    window.onpopstate = function() {"
+                "      window.history.pushState(null, '', window.location.href);"
+                "    };"
+                "  }"
+                "};"
+                "</script>"
+                "</head><body>"
+                "<div class='login-container'>"
+                "<div class='login-box'>"
+                "<h1>Login</h1>"
+                "<form action='/login' method='POST'>"
+                "Username: <input type='text' name='username'><br>"
+                "Password: <input type='password' name='password'><br>"
+                "<input type='submit' value='Login'>"
+                "</form>"
+                "<a href='/' class='back-button'>Back to Main Page</a>" +
+                    message +
+                    "</div></div></body></html>");
+}
 
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "-1");
+void showUserPage()
+{
+    if (!loggedIn)
+    {
+        server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        server.sendHeader("Pragma", "no-cache");
+        server.sendHeader("Expires", "-1");
+        server.send(200, "text/html",
+                    "<html><body><script>alert('Unauthorized access! Please log in.');</script>"
+                    "<meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+        return;
+    }
 
-  String page = R"rawliteral(
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
+
+    String page = R"rawliteral(
 <html><head><style>
   body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); color: white; font-family: Arial, sans-serif; height: 100vh; margin: 0; position: relative; }
   .wire { position: absolute; left: calc(50% - 2px); bottom: 50%; width: 4px; height: 60vh; background: #000; z-index: 1; }
@@ -1718,7 +1783,7 @@ void showUserPage() {
         }
 
         const serverIP = await resolveServerIP();
-        const wsUrl = `ws://${serverIP}:81`;
+        const wsUrl = `ws:
         console.log('Connecting to WebSocket at:', wsUrl);
         
         ws = new WebSocket(wsUrl);
@@ -1800,14 +1865,12 @@ void showUserPage() {
 </body></html>
 )rawliteral";
 
-  server.send(200, "text/html", page);
+    server.send(200, "text/html", page);
 }
 
+void showAddUserPage()
+{
 
-
-
-void showAddUserPage() {
-    // Reset the fingerprint status when the page loads
     fingerprintAdded = false;
     saveFingerprintAdded(false);
     registrationActive = false;
@@ -1815,12 +1878,10 @@ void showAddUserPage() {
     isAssigningId = false;
     idAssigned = false;
 
-    // Set headers to prevent caching
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
 
-    // Create the HTML content using R"rawliteral(...)"
     String pageContent = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -1857,56 +1918,19 @@ void showAddUserPage() {
         .tooltiptext { visibility: hidden; width: 200px; background-color: #00d4ff; color: #fff; text-align: center; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; left: 160%; top: -30px; }
         .username-tooltip:hover .tooltiptext { visibility: visible; }
 
-        /* Progress bar styles */
+       
         @keyframes progress { 0% { --percentage: 0; } 100% { --percentage: var(--value); } }
         @property --percentage { syntax: '<number>'; inherits: true; initial-value: 0; }
         [role="progressbar"] { --percentage: var(--value); --primary: #369; --secondary: #adf; --size: 150px; animation: progress 2s 0.5s forwards; width: var(--size); aspect-ratio: 1; border-radius: 50%; position: relative; overflow: hidden; display: grid; place-items: center; box-shadow: 0 0 20px rgba(0, 255, 255, 0.4); } 
         [role="progressbar"]::before { content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: conic-gradient(var(--primary) calc(var(--percentage) * 1%), var(--secondary) 0); mask: radial-gradient(white 55%, transparent 0); mask-mode: alpha; -webkit-mask: radial-gradient(#0000 55%, #000 0); -webkit-mask-mode: alpha; } 
         [role="progressbar"]::after { counter-reset: percentage var(--value); content: counter(percentage) '%'; font-family: Helvetica, Arial, sans-serif; font-size: calc(var(--size) / 5); color: var(--primary); }
 
-        /* Modal styles */
-        .modal { 
-            display: none; 
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-        
-        .modal-content {
-            background-color: #1A4D8A;
-            padding: 20px;
-            border-radius: 15px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            width: 260px;
-            text-align: center;
-        }
-        
-        .close-button { 
-            margin-top: 15px; 
-            padding: 10px 20px; 
-            background-color: #00d4ff; 
-            color: #ffffff; 
-            border: none; 
-            border-radius: 5px; 
-            cursor: pointer; 
-        }
-        
-        .close-button:hover { 
-            background-color: #00a3cc; 
-        }
-
-        #fingerprint-status {
-            color: #00d4ff;
-            margin-bottom: 20px;
-        }
+       
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); justify-content: center; align-items: center; z-index: 1000; } 
+        .modal-content { background-color: #1A4D8A; padding: 20px; border-radius: 15px; display: flex; flex-direction: column; align-items: center; width: 260px; text-align: center; } 
+        .close-button { margin-top: 15px; padding: 10px 20px; background-color: #00d4ff; color: #ffffff; border: none; border-radius: 5px; cursor: pointer; } 
+        .close-button:hover { background-color: #00a3cc; } 
+        #fingerprint-status { color: #00d4ff; margin-bottom: 20px; }
     </style>
 </head>
 <body>
@@ -1995,11 +2019,11 @@ void showAddUserPage() {
   
   async function resolveServerIP() {
       try {
-          // Make a request to get server info
+          
           const response = await fetch('/ws-info');
           const serverInfo = await response.text();
           
-          // Extract IP from the server info
+          
           const ipMatch = serverInfo.match(/Server IP: ([\d\.]+)/);
           if (ipMatch && ipMatch[1]) {
               console.log('Resolved server IP:', ipMatch[1]);
@@ -2102,7 +2126,7 @@ void showAddUserPage() {
               }, 500);
           };
   
-          // Rest of the WebSocket handlers remain the same...
+          
           ws.onmessage = function(event) {
               console.log('Received from server:', event.data);
               try {
@@ -2112,20 +2136,20 @@ void showAddUserPage() {
                       const status = document.getElementById('fingerprint-status');
                       
                       if (progressBar && status) {
-                          // Update status message
+                          
                           status.innerText = data.message;
                           
-                          // Handle animation if specified
+                          
                           if (data.animate) {
                               progressBar.style.setProperty('--value', data.progressValue.toString());
                               progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
                           } else {
-                              // Set fixed progress value
+                              
                               progressBar.style.setProperty('--value', data.progressValue.toString());
                               progressBar.setAttribute('aria-valuenow', data.progressValue.toString());
                           }
                           
-                          // Change status color based on error messages
+                          
                           if (data.message.includes('error') || data.message.includes('don\'t match')) {
                               status.style.color = 'red';
                               setTimeout(() => {
@@ -2234,7 +2258,7 @@ void showAddUserPage() {
           }
       }
   
-      // Clear error message when fingerprint is successfully added
+      
       if (status === 'success' && fingerprintError) {
           fingerprintError.innerText = '';
       }
@@ -2246,11 +2270,11 @@ void showAddUserPage() {
           return;
       }
       
-      // Only reset registration in progress, but keep the fingerprint status
+      
       registrationInProgress = false;
       document.getElementById('fingerprint-modal').style.display = 'none';
       
-      // Don't reset the fingerprint status if it was successfully added
+      
       if (!fingerprintAdded) {
           resetFingerprintButton();
       }
@@ -2276,30 +2300,28 @@ void showAddUserPage() {
       const fingerprintError = document.getElementById("fingerprint-error");
       
       if (isComplete) {
-          // Disable button
+          
           fingerprintButton.disabled = true;
           fingerprintButton.style.backgroundColor = "#aaa7ad";
           fingerprintButton.style.cursor = "not-allowed";
           
-          // Clear error message
+          
           if (fingerprintError) {
               fingerprintError.innerText = '';
           }
           
-          // Set the global state
           fingerprintAdded = true;
       } else {
-          // Reset button
+          
           fingerprintButton.disabled = false;
           fingerprintButton.style.backgroundColor = "#00d4ff";
           fingerprintButton.style.cursor = "pointer";
           
-          // Show error message
+          
           if (fingerprintError) {
               fingerprintError.innerText = 'Fingerprint not added';
           }
           
-          // Reset the global state
           fingerprintAdded = false;
       }
   }
@@ -2320,21 +2342,21 @@ void showAddUserPage() {
       progressBar.style.setProperty('--value', '0');
       status.innerText = 'Resolving connection...';
   
-      // Close existing WebSocket if any
+      
       if (ws) {
           console.log('Closing existing WebSocket connection');
           ws.close();
           ws = null;
       }
   
-      // Resolve the server IP first
+      
       resolveServerIP().then(serverIP => {
           if (!serverIP) {
               throw new Error('Could not resolve server IP');
           }
   
-          // Use the resolved IP for WebSocket connection
-          const wsUrl = `ws://${serverIP}:81`;
+          
+          const wsUrl = `ws:
           console.log('Attempting WebSocket connection to:', wsUrl);
   
           ws = new WebSocket(wsUrl);
@@ -2344,7 +2366,7 @@ void showAddUserPage() {
               status.innerText = 'Connected, starting registration...';
               status.style.color = '#00d4ff';
               
-              // Update debug info
+              
               const debugInfo = document.getElementById('debug-info');
               if (debugInfo) {
                   debugInfo.textContent = `Connected to: ${serverIP} (resolved from ${window.location.hostname})`;
@@ -2397,7 +2419,7 @@ void showAddUserPage() {
       });
   }
   
-  // Add connection verification on page load
+  
   window.addEventListener('load', async () => {
       const serverIP = await resolveServerIP();
       const debugInfo = document.getElementById('debug-info');
@@ -2422,21 +2444,21 @@ void showAddUserPage() {
           progressBar.setAttribute('aria-valuenow', '0');
       }
       
-      // Only reset the status message if fingerprint wasn't successfully added
+      
       if (!fingerprintAdded) {
           document.getElementById('fingerprint-status').innerText = 'Ready to start...';
       }
       
-      // Only partially reset the registration state
+      
       registrationInProgress = false;
       
-      // Don't reset the fingerprint button if registration was successful
+      
       const fingerprintButton = document.getElementById('add-fingerprint');
       if (fingerprintButton && !fingerprintAdded) {
           resetFingerprintButton();
       }
       
-      // Clear any error messages if fingerprint was successfully added
+      
       if (fingerprintAdded) {
           const fingerprintError = document.getElementById('fingerprint-error');
           if (fingerprintError) {
@@ -2462,24 +2484,24 @@ void showAddUserPage() {
           case 1: targetValue = 50; break;
           case 2: targetValue = 75; break;
           case 3: 
-              targetValue = 100;  // Make sure it's 100% for completion
+              targetValue = 100;  
               registrationInProgress = false;
               fingerprintAdded = true;
-              updateFingerprintStatus(true);  // This will update both button and error states
+              updateFingerprintStatus(true);  
               
-              // Remove error message
+              
               if (fingerprintError) {
                   fingerprintError.innerText = '';
               }
               
-              // Update progress bar to 100%
+              
               progressBar.style.setProperty('--value', '100');
               progressBar.setAttribute('aria-valuenow', '100');
               break;
           default: targetValue = 0;
       }
   
-      // Only update progress if not step 3 (since step 3 handles it separately above)
+      
       if (step !== 3) {
           progressBar.style.setProperty('--value', targetValue.toString());
           progressBar.setAttribute('aria-valuenow', targetValue.toString());
@@ -2512,7 +2534,7 @@ void showAddUserPage() {
           fingerprintAdded = data.fingerprintAdded;
           if (fingerprintAdded) {
               disableFingerprintButton();
-              // Clear error message if fingerprint is already added
+              
               const fingerprintError = document.getElementById('fingerprint-error');
               if (fingerprintError) {
                   fingerprintError.innerText = '';
@@ -2554,7 +2576,7 @@ void showAddUserPage() {
                   if (response.success) {
                       alert('New User Added Successfully! PIN: ' + response.pin);
                       form.reset();
-                      resetFingerprintButton();  // Reset the button here
+                      resetFingerprintButton();  
                   } else {
                       displayErrorMessages(response.errors);
                   }
@@ -2628,185 +2650,198 @@ void showAddUserPage() {
     server.send(200, "text/html", pageContent);
 }
 
-// Funkcija za prikaz admin panela
-void showAdminPage() {
-  if (!loggedIn || loggedInUser.username != "admin") {
+void showAdminPage()
+{
+    if (!loggedIn || loggedInUser.username != "admin")
+    {
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        server.sendHeader("Pragma", "no-cache");
+        server.sendHeader("Expires", "-1");
+        server.send(200, "text/html",
+                    "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
+        return;
+    }
+
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     server.sendHeader("Pragma", "no-cache");
     server.sendHeader("Expires", "-1");
-    server.send(200, "text/html",
-                "<html><body><script>alert('Unauthorized access! Please log in.');</script><meta http-equiv='refresh' content='0;url=/loginPage' /></body></html>");
-    return;
-  }
 
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "-1");
+    String page = "<html><head><style>"
+                  " body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
+                  ".container { display: flex; justify-content: center; align-items: center; flex-direction: column; height: 100vh; }"
+                  "table { width: 60%; border-collapse: collapse; margin: 20px auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 0 20px rgba(0, 0, 0, 0.1); }"
+                  "th, td { padding: 15px; text-align: left; border-bottom: 1px solid #ddd; }"
+                  "th { background-color: #1A4D8A; color: white; }"
+                  "td { color: #333; }"
+                  "tr:hover { background-color: #f1f1f1; }"
+                  "td + td { border-left: 1px solid #ddd; }"
+                  ".delete-button { background-color: red; color: white; padding: 10px; border: none; border-radius: 10px; cursor: pointer; }"
+                  ".delete-button:hover { background-color: darkred; }"
+                  ".logout-button { background-color: #1A4D8A; color: white; padding: 20px; font-size: 18px; border: none; border-radius: 25px; cursor: pointer; margin-top: 20px; }"
+                  ".logout-button:hover { background-color: #155082; }"
+                  "</style></head><body>"
+                  "<div class='container'><h1>Admin Panel</h1>"
+                  "<table><tr><th>Username</th><th>Action</th></tr>";
 
-  String page = "<html><head><style>"
-                " body { background: linear-gradient(to bottom, #0399FA, #0B2E6D); font-family: Arial, sans-serif; }"
-                ".container { display: flex; justify-content: center; align-items: center; flex-direction: column; height: 100vh; }"
-                "table { width: 60%; border-collapse: collapse; margin: 20px auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 0 20px rgba(0, 0, 0, 0.1); }"
-                "th, td { padding: 15px; text-align: left; border-bottom: 1px solid #ddd; }"
-                "th { background-color: #1A4D8A; color: white; }"
-                "td { color: #333; }"
-                "tr:hover { background-color: #f1f1f1; }"
-                "td + td { border-left: 1px solid #ddd; }"
-                ".delete-button { background-color: red; color: white; padding: 10px; border: none; border-radius: 10px; cursor: pointer; }"
-                ".delete-button:hover { background-color: darkred; }"
-                ".logout-button { background-color: #1A4D8A; color: white; padding: 20px; font-size: 18px; border: none; border-radius: 25px; cursor: pointer; margin-top: 20px; }"
-                ".logout-button:hover { background-color: #155082; }"
-                "</style></head><body>"
-                "<div class='container'><h1>Admin Panel</h1>"
-                "<table><tr><th>Username</th><th>Action</th></tr>";
+    page += "<tr><td>admin</td><td>Default User</td></tr>";
 
-  // Prikaz admin korisnika prvo
-  page += "<tr><td>admin</td><td>Default User</td></tr>";
-
-  // Prikaz ostalih korisnika
-  for (User &user : users) {
-    if (user.username != "admin") {
-      page += "<tr><td>" + user.username + "</td>"
-              "<td><a href='/delete?username=" + user.username + "'><button class='delete-button'>Delete</button></a></td></tr>";
-    }
-  }
-
-  page += "</table><a href='/logout'><button class='logout-button'>Logout</button></a></div></body></html>";
-  server.send(200, "text/html", page);
-}
-
-
-
-
-// Funkcija za obradu logovanja
-void handleLogin() {
-  if (server.hasArg("username") && server.hasArg("password")) {
-    String enteredUsername = server.arg("username");
-    String enteredPassword = server.arg("password");
-
-    bool userExists = false;
-    bool passwordCorrect = false;
-
-    for (User &u : users) {
-      if (u.username == enteredUsername) {
-        userExists = true;
-        if (u.pin == enteredPassword) {
-          passwordCorrect = true;
-          loggedIn = true;  // Korisnik je sada ulogovan
-          loggedInUser = u;
-          break;
+    for (User &user : users)
+    {
+        if (user.username != "admin")
+        {
+            page += "<tr><td>" + user.username + "</td>"
+                                                 "<td><a href='/delete?username=" +
+                    user.username + "'><button class='delete-button'>Delete</button></a></td></tr>";
         }
-      }
     }
 
-    if (!userExists || !passwordCorrect) {
-      loginFailed = true;  // Postavi da je login neuspešan
-      showLoginPage();  // Prikaz login stranice sa porukom o grešci
-    } else {
-      // Preusmeravanje na korisničku ili admin stranicu
-      if (loggedInUser.username == "admin") {
-        showAdminPage();  // Idi na admin panel ako je korisnik admin
-      } else {
-        showUserPage();  // Idi na korisničku stranicu ako nije admin
-      }
-
-      // Pošalji trenutne statuse svim komponentama korisniku koji se upravo ulogovao
-      if (loggedInClientNum != -1) {
-        sendAllStatusesToClient(loggedInClientNum);
-      }
-    }
-  }
+    page += "</table><a href='/logout'><button class='logout-button'>Logout</button></a></div></body></html>";
+    server.send(200, "text/html", page);
 }
 
-// Funkcija za dodavanje korisnika
-void handleAddUser() {
+void handleLogin()
+{
+    if (server.hasArg("username") && server.hasArg("password"))
+    {
+        String enteredUsername = server.arg("username");
+        String enteredPassword = server.arg("password");
+
+        bool userExists = false;
+        bool passwordCorrect = false;
+
+        for (User &u : users)
+        {
+            if (u.username == enteredUsername)
+            {
+                userExists = true;
+                if (u.pin == enteredPassword)
+                {
+                    passwordCorrect = true;
+                    loggedIn = true;
+                    loggedInUser = u;
+                    break;
+                }
+            }
+        }
+
+        if (!userExists || !passwordCorrect)
+        {
+            loginFailed = true;
+            showLoginPage();
+        }
+        else
+        {
+
+            if (loggedInUser.username == "admin")
+            {
+                showAdminPage();
+            }
+            else
+            {
+                showUserPage();
+            }
+
+            if (loggedInClientNum != -1)
+            {
+                sendAllStatusesToClient(loggedInClientNum);
+            }
+        }
+    }
+}
+
+void handleAddUser()
+{
     Serial.println("Entering handleAddUser...");
     DynamicJsonDocument jsonResponse(1024);
     JsonObject errors = jsonResponse.createNestedObject("errors");
     bool success = true;
 
-    // Get form data
     String enteredUsername = server.arg("username");
     String selectedVoiceCommand = server.arg("voiceCommand");
-    
-    // Add debug prints
+
     Serial.printf("Current Registration State:\n");
     Serial.printf("fingerprintAdded: %s\n", fingerprintAdded ? "true" : "false");
-    Serial.printf("currentRegistration.registrationComplete: %s\n", 
-                 currentRegistration.registrationComplete ? "true" : "false");
-    Serial.printf("currentRegistration.assignedID: %d\n", 
-                 currentRegistration.assignedID);
-    
-    // Check both registration completion and assigned ID
-    bool isFingerprintValid = fingerprintAdded && 
-                            currentRegistration.registrationComplete && 
-                            currentRegistration.assignedID > 0;
+    Serial.printf("currentRegistration.registrationComplete: %s\n",
+                  currentRegistration.registrationComplete ? "true" : "false");
+    Serial.printf("currentRegistration.assignedID: %d\n",
+                  currentRegistration.assignedID);
 
-    // Validation checks
-    if (!isFingerprintValid) {
+    bool isFingerprintValid = fingerprintAdded &&
+                              currentRegistration.registrationComplete &&
+                              currentRegistration.assignedID > 0;
+
+    if (!isFingerprintValid)
+    {
         Serial.println("Fingerprint validation failed:");
         Serial.printf("fingerprintAdded: %s\n", fingerprintAdded ? "true" : "false");
-        Serial.printf("registrationComplete: %s\n", 
-                     currentRegistration.registrationComplete ? "true" : "false");
+        Serial.printf("registrationComplete: %s\n",
+                      currentRegistration.registrationComplete ? "true" : "false");
         Serial.printf("assignedID: %d\n", currentRegistration.assignedID);
         errors["fingerprint"] = "Fingerprint not added.";
         success = false;
     }
 
     Serial.printf("Received data - Username: %s, Voice Command: %s, Fingerprint Added: %s, Registration Complete: %s\n",
-                 enteredUsername.c_str(), 
-                 selectedVoiceCommand.c_str(), 
-                 fingerprintAdded ? "true" : "false",
-                 currentRegistration.registrationComplete ? "true" : "false");
+                  enteredUsername.c_str(),
+                  selectedVoiceCommand.c_str(),
+                  fingerprintAdded ? "true" : "false",
+                  currentRegistration.registrationComplete ? "true" : "false");
 
-    // Validate CAPTCHA
-    if (!server.hasArg("captcha")) {
+    if (!server.hasArg("captcha"))
+    {
         Serial.println("CAPTCHA validation failed");
         errors["captcha"] = true;
         success = false;
     }
 
-    // Username validation
-    if (enteredUsername.isEmpty()) {
+    if (enteredUsername.isEmpty())
+    {
         Serial.println("Username is empty");
         errors["username"] = "Please enter a username.";
         success = false;
-    } else if (!isValidUsername(enteredUsername)) {
+    }
+    else if (!isValidUsername(enteredUsername))
+    {
         Serial.println("Username is invalid");
         errors["username"] = "Invalid username! Must start with a letter and contain only letters and numbers.";
         success = false;
-    } else {
-        // Check if username already exists
+    }
+    else
+    {
+
         bool userExists = false;
-        for (const User &u : users) {
-            if (u.username == enteredUsername) {
+        for (const User &u : users)
+        {
+            if (u.username == enteredUsername)
+            {
                 userExists = true;
                 break;
             }
         }
-        if (userExists) {
+        if (userExists)
+        {
             Serial.println("Username already exists");
             errors["username"] = "Error: User already exists!";
             success = false;
         }
     }
 
-    // Fingerprint validation
-    if (!fingerprintAdded || !currentRegistration.registrationComplete) {
+    if (!fingerprintAdded || !currentRegistration.registrationComplete)
+    {
         Serial.println("Fingerprint not properly added or registration incomplete");
         errors["fingerprint"] = "Fingerprint not added.";
         success = false;
     }
 
-    // Voice command validation
-    if (selectedVoiceCommand.isEmpty()) {
+    if (selectedVoiceCommand.isEmpty())
+    {
         Serial.println("Voice command not selected");
         errors["voiceCommand"] = "Voice command not selected.";
         success = false;
     }
 
-    // If any validation failed, return error response
-    if (!success) {
+    if (!success)
+    {
         Serial.println("Validation failed, sending error response");
         jsonResponse["success"] = false;
         String response;
@@ -2815,166 +2850,157 @@ void handleAddUser() {
         return;
     }
 
-    // All validations passed, proceed with user creation
     Serial.printf("Current Fingerprint ID: %d\n", fingerprintID);
 
-    // Generate new PIN
     String newPin = generateUniquePin();
     Serial.printf("Generated PIN: %s\n", newPin.c_str());
 
-    // Create new user with current fingerprint ID
     String fingerprintID_str = String(currentRegistration.assignedID);
     User newUser = {
         enteredUsername,
         newPin,
         fingerprintID_str,
-        selectedVoiceCommand
-    };
+        selectedVoiceCommand};
 
-    // Add user to vector and save to file
     users.push_back(newUser);
     saveUserToFile(enteredUsername, newPin, fingerprintID_str, selectedVoiceCommand);
 
     Serial.printf("Added user: Username: %s, PIN: %s, Fingerprint ID: %s, Voice Command: %s\n",
-                 enteredUsername.c_str(), 
-                 newPin.c_str(), 
-                 fingerprintID_str.c_str(), 
-                 selectedVoiceCommand.c_str());
+                  enteredUsername.c_str(),
+                  newPin.c_str(),
+                  fingerprintID_str.c_str(),
+                  selectedVoiceCommand.c_str());
 
-    // Reset registration states
     fingerprintAdded = false;
     saveFingerprintAdded(false);
     currentRegistration = {
-        -1,             // Reset assigned ID
-        false,          // Reset completion status
-        0              // Reset start time
-    };
+        -1,
+        false,
+        0};
 
-    // Prepare success response
     jsonResponse["success"] = true;
     jsonResponse["pin"] = newPin;
     String response;
     serializeJson(jsonResponse, response);
-    
-    // Send response
+
     server.send(200, "application/json", response);
 
-    // Refresh fingerprint IDs after adding user
     Serial.println("Refreshing fingerprint IDs after adding user...");
     refreshFingerprintIDs();
 
     Serial.println("Successfully completed handleAddUser");
 }
 
+String generateUniquePin()
+{
+    String pin;
+    bool unique = false;
 
+    while (!unique)
+    {
 
+        pin = String(random(1000, 9999));
 
-// Funkcija za generisanje jedinstvenog PIN-a
-String generateUniquePin() {
-  String pin;
-  bool unique = false;
-
-  while (!unique) {
-    // Generišite nasumičan PIN od 4 cifre
-    pin = String(random(1000, 9999));
-
-    // Proverite da li PIN već postoji
-    unique = true;
-    for (User &u : users) {
-      if (u.pin == pin) {
-        unique = false;
-        break;
-      }
+        unique = true;
+        for (User &u : users)
+        {
+            if (u.pin == pin)
+            {
+                unique = false;
+                break;
+            }
+        }
     }
-  }
 
-  return pin;
+    return pin;
 }
 
-
-// Funkcija za validaciju username-a
-bool isValidUsername(const String& username) {
-  if (username.length() == 0) {
-    return false;
-  }
-
-  // Provera da li prvo slovo jeste slovo
-  if (!isalpha(username.charAt(0))) {
-    return false;
-  }
-
-  // Provera da li su svi karakteri slova ili brojevi
-  for (size_t i = 0; i < username.length(); i++) {
-    char c = username.charAt(i);
-    if (!isalnum(c)) {
-      return false;
+bool isValidUsername(const String &username)
+{
+    if (username.length() == 0)
+    {
+        return false;
     }
-  }
 
-  return true;
+    if (!isalpha(username.charAt(0)))
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < username.length(); i++)
+    {
+        char c = username.charAt(i);
+        if (!isalnum(c))
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
+bool isValidPassword(String password)
+{
+    if (password.length() <= 6)
+        return false;
+    bool hasLower = false, hasUpper = false, hasDigit = false;
 
-// Funkcija za validaciju password-a
-bool isValidPassword(String password) {
-  if (password.length() <= 6) return false;
-  bool hasLower = false, hasUpper = false, hasDigit = false;
+    for (int i = 0; i < password.length(); i++)
+    {
+        if (islower(password[i]))
+            hasLower = true;
+        if (isupper(password[i]))
+            hasUpper = true;
+        if (isdigit(password[i]))
+            hasDigit = true;
+    }
 
-  for (int i = 0; i < password.length(); i++) {
-    if (islower(password[i])) hasLower = true;
-    if (isupper(password[i])) hasUpper = true;
-    if (isdigit(password[i])) hasDigit = true;
-  }
-
-  return hasLower && hasUpper && hasDigit;
+    return hasLower && hasUpper && hasDigit;
 }
 
-// Funkcija za brisanje korisnika
-void handleUserDeletion() {
-    if (server.hasArg("username")) {
+void handleUserDeletion()
+{
+    if (server.hasArg("username"))
+    {
         String usernameToDelete = server.arg("username");
 
-        // Prevent deletion of the admin user
-        if (usernameToDelete == "admin") {
+        if (usernameToDelete == "admin")
+        {
             server.send(200, "text/html",
                         "<html><body><script>alert('Admin user cannot be deleted!');</script>"
                         "<meta http-equiv='refresh' content='0;url=/' /></body></html>");
             return;
         }
 
-        // Call deleteUserFromFile first to handle file and fingerprint deletion
         deleteUserFromFile(usernameToDelete);
 
-        // Now remove the user from the in-memory list
-        for (auto it = users.begin(); it != users.end(); ++it) {
-            if (it->username == usernameToDelete) {
+        for (auto it = users.begin(); it != users.end(); ++it)
+        {
+            if (it->username == usernameToDelete)
+            {
                 users.erase(it);
                 break;
             }
         }
 
-        // Refresh the admin page
         showAdminPage();
     }
 }
 
+void handleLogout()
+{
+    loggedIn = false;
+    loggedInUser = {"", ""};
 
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "-1");
 
-// Funkcija za odjavu korisnika
-void handleLogout() {
-  loggedIn = false;
-  loggedInUser = {"", ""};  // Resetovanje stanja prijave
-
-  // Postavljanje zaglavlja da se onemogući keširanje
-  server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-  server.sendHeader("Pragma", "no-cache");
-  server.sendHeader("Expires", "-1");
-
-  // Preusmeravanje na glavnu stranicu
-  showMainPage();
+    showMainPage();
 }
 
-void checkDebugStatus() {
+void checkDebugStatus()
+{
     Serial.println("\n=== Debug Status Check ===");
     Serial.printf("DEBUG_REGISTRATION: %s\n", DEBUG_REGISTRATION ? "true" : "false");
     Serial.printf("registrationActive: %s\n", registrationActive ? "true" : "false");
@@ -2982,49 +3008,52 @@ void checkDebugStatus() {
     Serial.printf("Time since last debug: %lu ms\n", millis() - lastRegistrationDebug);
 }
 
-void handleRegistrationDebug() {
-    if (registrationActive) {
+void handleRegistrationDebug()
+{
+    if (registrationActive)
+    {
         logRegistrationStatus("State Change Check");
     }
 }
 
-void scanI2CBuses() {
+void scanI2CBuses()
+{
     Serial.println("\nScanning primary I2C bus (Wire)...");
-    for(byte address = 1; address < 127; address++) {
+    for (byte address = 1; address < 127; address++)
+    {
         Wire.beginTransmission(address);
         byte error = Wire.endTransmission();
-        if (error == 0) {
+        if (error == 0)
+        {
             Serial.printf("Device found on Wire at address 0x%02X\n", address);
         }
     }
-    
+
     Serial.println("\nScanning secondary I2C bus (Wire1)...");
-    for(byte address = 1; address < 127; address++) {
+    for (byte address = 1; address < 127; address++)
+    {
         Wire1.beginTransmission(address);
         byte error = Wire1.endTransmission();
-        if (error == 0) {
+        if (error == 0)
+        {
             Serial.printf("Device found on Wire1 at address 0x%02X\n", address);
         }
     }
 }
 
-
-void setup() {
+void setup()
+{
     Serial.begin(115200);
     randomSeed(analogRead(0));
 
-    
-    // Initialize primary I2C bus for OLED
     Wire.begin(OLED_SDA, OLED_SCL);
-    Wire.setClock(400000);  // 400kHz for OLED
-    
-    // Initialize secondary I2C bus for voice sensor
+    Wire.setClock(400000);
+
     Wire1.begin(VOICE_SDA, VOICE_SCL);
-    Wire1.setClock(100000);  // 100kHz for voice sensor
-    
-    // Debug I2C devices
+    Wire1.setClock(100000);
+
     scanI2CBuses();
-    
+
     mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
     finger.begin(57600);
 
@@ -3033,8 +3062,8 @@ void setup() {
 
     fingerprintMutex = xSemaphoreCreateMutex();
 
-    // Initialize SPIFFS
-    if (!SPIFFS.begin(true)) {
+    if (!SPIFFS.begin(true))
+    {
         Serial.println("Greška pri montiranju SPIFFS");
         return;
     }
@@ -3042,15 +3071,15 @@ void setup() {
     initializeUserFile();
     loadUsersFromFile();
 
-    // Pin Setup
     pinMode(ledPin, OUTPUT);
     pinMode(blueLedPin, OUTPUT);
     pinMode(pirPin, INPUT);
 
-     // Initialize OLED (using default Wire bus)
-    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
+    {
         Serial.println(F("OLED failed to initialize"));
-        for(;;);
+        for (;;)
+            ;
     }
 
     display.clearDisplay();
@@ -3060,59 +3089,39 @@ void setup() {
     display.print("Waiting for motion...");
     display.display();
 
-    // WiFi Setup
     WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
+    while (WiFi.status() != WL_CONNECTED)
+    {
         delay(500);
         Serial.print(".");
     }
     Serial.println("\nWiFi povezan. IP adresa: ");
     Serial.println(WiFi.localIP());
 
-    // WebSocket Setup
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
     webSocket.enableHeartbeat(15000, 3000, 2);
 
-       server.begin();
+    server.begin();
 
     initializeRegistrationState();
-    cleanupOrphanedFingerprints();
 
-  // Initialize voice sensor (using Wire1)
-    if (!asr.begin()) {
-        Serial.println("Voice sensor failed to initialize");
-        delay(3000);
-    } else {
-        Serial.println("Voice sensor initialized successfully!");
-        
-        // Configure voice sensor
-        asr.setVolume(7);
-        asr.setMuteMode(0);
-        asr.setWakeTime(20);
-        
-        // Verify settings
-        delay(100);
-        uint8_t wakeTime = asr.getWakeTime();
-        Serial.printf("Wake Time set to: %d\n", wakeTime);
-    }
+    Serial.print("WebSocket server running on: ws:
+    Serial.print(WiFi.localIP());
+    Serial.println(":81");
 
-    Serial.print("WebSocket server running on: ws://");
-  Serial.print(WiFi.localIP());
-  Serial.println(":81");
+    
+    server.enableCORS(true); 
 
-    // Server Routes Setup
-    server.enableCORS(true);  // This is the correct way to enable CORS on ESP32
-
-    // Add headers to handle preflight requests
-    server.on("/", HTTP_OPTIONS, []() {
+    
+    server.on("/", HTTP_OPTIONS, []()
+              {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
         server.sendHeader("Access-Control-Allow-Headers", "*");
-        server.send(204);
-    });
+        server.send(204); });
+
     
-    // Main Routes
     server.on("/", showMainPage);
     server.on("/loginPage", showLoginPage);
     server.on("/addUserPage", HTTP_GET, showAddUserPage);
@@ -3121,23 +3130,25 @@ void setup() {
     server.on("/login", HTTP_POST, handleLogin);
     server.on("/delete", HTTP_GET, handleUserDeletion);
     server.on("/logout", HTTP_GET, handleLogout);
-    
-    // Diagnostic Routes
-    server.on("/ws-info", HTTP_GET, []() {
-    String info = "WebSocket Server Info:\n";
-    info += "Server IP: " + WiFi.localIP().toString() + "\n";
-    info += "Server Port: 81\n";
-    info += "Connected Clients: " + String(connectedClients) + "\n";
-    info += "Client Status:\n";
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-        info += "Client " + String(i) + ": " + (clientConnected[i] ? "Connected" : "Disconnected") + "\n";
-    }
-    info += "WiFi Status: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "\n";
-    info += "RSSI: " + String(WiFi.RSSI()) + " dBm\n";
-    server.send(200, "text/plain", info);
-});
 
-    server.on("/test-ws", HTTP_GET, []() {
+    
+    server.on("/ws-info", HTTP_GET, []()
+              {
+        String info = "WebSocket Server Info:\n";
+        info += "Server IP: " + WiFi.localIP().toString() + "\n";
+        info += "Server Port: 81\n";
+        info += "Connected Clients: " + String(connectedClients) + "\n";
+        info += "Client Status:\n";
+        for (int i = 0; i < MAX_CLIENTS; i++)
+        {
+            info += "Client " + String(i) + ": " + (clientConnected[i] ? "Connected" : "Disconnected") + "\n";
+        }
+        info += "WiFi Status: " + String(WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected") + "\n";
+        info += "RSSI: " + String(WiFi.RSSI()) + " dBm\n";
+        server.send(200, "text/plain", info); });
+
+    server.on("/test-ws", HTTP_GET, []()
+              {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         String html = R"html(
             <html>
@@ -3157,7 +3168,7 @@ void setup() {
                 <script>
                     let ws;
                     function connect() {
-                        ws = new WebSocket('ws://' + window.location.hostname + ':81');
+                        ws = new WebSocket('ws:
                         ws.onopen = () => {
                             document.getElementById('status').innerHTML = 'Status: Connected';
                             console.log('WebSocket Connected');
@@ -3187,89 +3198,62 @@ void setup() {
             </body>
             </html>
         )html";
-        server.send(200, "text/html", html);
-    });
+        server.send(200, "text/html", html); });
 
-
-
-    // Servo Setup
+    
     ESP32PWM::allocateTimer(0);
     myservo.setPeriodHertz(50);
     myservo.attach(servoPin, 1000, 2000);
-
-        Serial.println("Testing servo...");
-    myservo.write(0);   // Move to start position
-    delay(1000);
-    myservo.write(180); // Test full movement
-    delay(1000);
-    myservo.write(0);   // Return to start
-    Serial.println("Servo test complete");
-
-    // Fingerprint Sensor Setup
-    if (finger.verifyPassword()) {
-        Serial.println("Found fingerprint sensor!");
-    } else {
-        Serial.println("Did not find fingerprint sensor :(");
-        while (1) { delay(1); }
-    }
-
-    Serial.println(F("Reading sensor parameters"));
-    finger.getParameters();
-    Serial.print(F("Status: 0x")); Serial.println(finger.status_reg, HEX);
-    Serial.print(F("Sys ID: 0x")); Serial.println(finger.system_id, HEX);
-    Serial.print(F("Capacity: ")); Serial.println(finger.capacity);
-    Serial.print(F("Security level: ")); Serial.println(finger.security_level);
-    Serial.print(F("Device address: ")); Serial.println(finger.device_addr, HEX);
-    Serial.print(F("Packet len: ")); Serial.println(finger.packet_len);
-    Serial.print(F("Baud rate: ")); Serial.println(finger.baud_rate);
-    
-    refreshFingerprintIDs();
-    
     Serial.println("\n=== System Setup Complete ===");
 }
 
-void testVoiceSensor() {
+void testVoiceSensor()
+{
     static unsigned long lastCheck = 0;
-    
-    if (millis() - lastCheck > 100) {  // Check every 100ms
+
+    if (millis() - lastCheck > 100)
+    {
         uint8_t CMDID = asr.getCMDID();
-        if (CMDID != 0) {
+        if (CMDID != 0)
+        {
             Serial.println("\nVoice Command Test:");
             Serial.printf("Command ID received: %d\n", CMDID);
-            
-            switch(CMDID) {
-                case 1:
-                    Serial.println("Wake word 'probudi se' detected");
-                    break;
-                case 2:
-                    Serial.println("Wake word 'hello robot' detected");
-                    break;
-                case 5:
-                    Serial.println("Command 'otvori se' detected");
-                    break;
-                default:
-                    Serial.printf("Unknown command ID: %d\n", CMDID);
+
+            switch (CMDID)
+            {
+            case 1:
+                Serial.println("Wake word 'probudi se' detected");
+                break;
+            case 2:
+                Serial.println("Wake word 'hello robot' detected");
+                break;
+            case 5:
+                Serial.println("Command 'otvori se' detected");
+                break;
+            default:
+                Serial.printf("Unknown command ID: %d\n", CMDID);
             }
         }
         lastCheck = millis();
     }
 }
 
-void loop() {
-     unsigned long currentMillis = millis();
+void loop()
+{
+    unsigned long currentMillis = millis();
     static bool firstScanMessage = true;
     static bool secondScanMessage = true;
-    
-    // Basic server and WebSocket handling
+
     server.handleClient();
     handleRegistrationDebug();
     webSocket.loop();
-    //testVoiceSensor();
-    
-    // Enhanced debug section for registration process
-    if (DEBUG_REGISTRATION) {
-        if (registrationActive) {
-            if (currentMillis - lastRegistrationDebug >= REGISTRATION_DEBUG_INTERVAL) {
+
+    if (DEBUG_REGISTRATION)
+    {
+        if (registrationActive)
+        {
+            if (currentMillis - lastRegistrationDebug >= REGISTRATION_DEBUG_INTERVAL)
+            {
                 Serial.println("\n=== Registration Process Debug ===");
                 Serial.printf("Current Step: %d\n", currentStep);
                 Serial.printf("ID Assigned: %s\n", idAssigned ? "Yes" : "No");
@@ -3277,17 +3261,18 @@ void loop() {
                 Serial.printf("Registration Active: %s\n", registrationActive ? "Yes" : "No");
                 Serial.printf("Time since last debug: %lu ms\n", currentMillis - lastRegistrationDebug);
                 lastRegistrationDebug = currentMillis;
-//                Serial.printf("WebSocket Clients Connected: %d\n", webSocket.connectedClients());
             }
-        } else if (currentMillis - lastRegistrationDebug >= 5000) {
+        }
+        else if (currentMillis - lastRegistrationDebug >= 5000)
+        {
             Serial.println("Registration is not active. Current status:");
             checkDebugStatus();
             lastRegistrationDebug = currentMillis;
         }
     }
 
-    // WebSocket status debug output
-    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL) {
+    if (DEBUG_WEBSOCKET && currentMillis - lastDebugPrint > DEBUG_INTERVAL)
+    {
         Serial.println("\n=== WebSocket Server Status ===");
         Serial.printf("Connected clients: %d\n", webSocket.connectedClients());
         Serial.printf("WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
@@ -3296,35 +3281,36 @@ void loop() {
         lastDebugPrint = currentMillis;
     }
 
-    // WebSocket ping
-    if (currentMillis - lastPing > 15000) {
+    if (currentMillis - lastPing > 15000)
+    {
         webSocket.broadcastPing();
         lastPing = currentMillis;
     }
 
-    // PIR Sensor and Password Input handling
     handlePIRSensor();
-    if (!firstStepVerified) {
+    if (!firstStepVerified)
+    {
         handlePasswordInput();
         getFingerprintID();
     }
-    
-    // Handle voice commands and password input
-  if (firstStepVerified && authenticatedUser != nullptr) {
+
+    if (firstStepVerified && authenticatedUser != nullptr)
+    {
         uint8_t CMDID = asr.getCMDID();
         static bool wakeWordDetected = false;
-        
-        if (CMDID != 0) {
+
+        if (CMDID != 0)
+        {
             Serial.printf("\nCommand received - CMDID: %d\n", CMDID);
             Serial.printf("Wake Word State: %s\n", wakeWordDetected ? "Active" : "Inactive");
             Serial.printf("Expected Command: %s\n", expectedVoiceCommand.c_str());
         }
-        
-        // Handle wake word detection
-        if (CMDID == 2) {  // "hello robot"
+
+        if (CMDID == 2)
+        {
             Serial.println("Wake word detected!");
             wakeWordDetected = true;
-            
+
             display.clearDisplay();
             display.setCursor(0, 0);
             display.println("Wake word OK!");
@@ -3332,104 +3318,116 @@ void loop() {
             display.display();
             delay(500);
         }
-        // Handle voice commands after wake word
-        else if (wakeWordDetected && CMDID != 0) {
+
+        else if (wakeWordDetected && CMDID != 0)
+        {
             bool validCommand = false;
-            
-            // Check if the received command matches the expected command
-            if (CMDID == expectedVoiceCommand.toInt()) {
+
+            if (CMDID == expectedVoiceCommand.toInt())
+            {
                 validCommand = true;
             }
-            // Additional command handling based on CMDID
-            switch(CMDID) {
-                case 5:  // "otvori se"
-                    if (validCommand) {
-                        Serial.println("Otvori se command received!");
-                        display.clearDisplay();
-                        displayWelcomeMessage(authenticatedUser->username);
-                        moveServo();
-                    }
-                    break;
-                    
-                case 6:  // "otkljucaj"
-                    if (validCommand) {
-                        Serial.println("Otkljucaj command received!");
-                        display.clearDisplay();
-                        displayWelcomeMessage(authenticatedUser->username);
-                        moveServo();
-                    }
-                    break;
-             
-                case 141: // "open the door"
-                    if (validCommand) {
-                        Serial.println("Open the door opening command received!");
-                        display.clearDisplay();
-                        displayWelcomeMessage(authenticatedUser->username);
-                        moveServo();
-                    }
-                    break;
-                    
-                case 7:   // "zatvori"
-                    if (validCommand) {
-                        Serial.println("Zatvori command received!");
-                        display.clearDisplay();
-                        displayWelcomeMessage(authenticatedUser->username);
-                        moveServo();
-                    }
-                    break;
-                    
-                case 142:  // "close the door"
-                    if (validCommand) {
-                        Serial.println("Close the door command received!");
-                        display.clearDisplay();
-                        displayWelcomeMessage(authenticatedUser->username);
-                        moveServo();
-                    }
-                    break;
-                    
-                case 82:  // "reset"
-                    if (validCommand) {
-                        Serial.println("Reset command received!");
-                        display.clearDisplay();
-                        displayWelcomeMessage(authenticatedUser->username);
-                        moveServo();
-                    }
-                    break;
-                    
-                case 130: // "auto mode"
-                    if (validCommand) {
-                        Serial.println("Auto mode command received!");
-                        display.clearDisplay();
-                        displayWelcomeMessage(authenticatedUser->username);
-                        moveServo();
-                    }
-                    break;
-                    
-                default:
-                    Serial.println("Unrecognized command");
-                    validCommand = false;
-                    break;
+
+            switch (CMDID)
+            {
+            case 5:
+                if (validCommand)
+                {
+                    Serial.println("Otvori se command received!");
+                    display.clearDisplay();
+                    displayWelcomeMessage(authenticatedUser->username);
+                    moveServo();
+                }
+                break;
+
+            case 6:
+                if (validCommand)
+                {
+                    Serial.println("Otkljucaj command received!");
+                    display.clearDisplay();
+                    displayWelcomeMessage(authenticatedUser->username);
+                    moveServo();
+                }
+                break;
+
+            case 141:
+                if (validCommand)
+                {
+                    Serial.println("Open the door opening command received!");
+                    display.clearDisplay();
+                    displayWelcomeMessage(authenticatedUser->username);
+                    moveServo();
+                }
+                break;
+
+            case 7:
+                if (validCommand)
+                {
+                    Serial.println("Zatvori command received!");
+                    display.clearDisplay();
+                    displayWelcomeMessage(authenticatedUser->username);
+                    moveServo();
+                }
+                break;
+
+            case 142:
+                if (validCommand)
+                {
+                    Serial.println("Close the door command received!");
+                    display.clearDisplay();
+                    displayWelcomeMessage(authenticatedUser->username);
+                    moveServo();
+                }
+                break;
+
+            case 82:
+                if (validCommand)
+                {
+                    Serial.println("Reset command received!");
+                    display.clearDisplay();
+                    displayWelcomeMessage(authenticatedUser->username);
+                    moveServo();
+                }
+                break;
+
+            case 130:
+                if (validCommand)
+                {
+                    Serial.println("Auto mode command received!");
+                    display.clearDisplay();
+                    displayWelcomeMessage(authenticatedUser->username);
+                    moveServo();
+                }
+                break;
+
+            default:
+                Serial.println("Unrecognized command");
+                validCommand = false;
+                break;
             }
-            
-            if (validCommand) {
-                // Reset states after successful command
+
+            if (validCommand)
+            {
+
                 firstStepVerified = false;
                 authenticatedUser = nullptr;
                 wakeWordDetected = false;
                 voiceAttempts = 0;
                 resetPIRDetection();
-            } else {
+            }
+            else
+            {
                 Serial.printf("Wrong command! Got %d, expected %s\n", CMDID, expectedVoiceCommand.c_str());
                 voiceAttempts++;
-                
-                if (voiceAttempts >= maxVoiceAttempts) {
+
+                if (voiceAttempts >= maxVoiceAttempts)
+                {
                     Serial.println("Too many failed voice command attempts!");
                     digitalWrite(blueLedPin, HIGH);
                     alarmState = true;
                     broadcastState("alarm", true);
                     sendTelegramMessage("Warning: Multiple failed voice command attempts detected!");
-                    
-                    // Reset all states
+
                     firstStepVerified = false;
                     authenticatedUser = nullptr;
                     wakeWordDetected = false;
@@ -3439,108 +3437,121 @@ void loop() {
             }
         }
     }
-    
+
     checkRegistrationTimeout();
 
-
-    // Fingerprint Registration Process
-    if (registrationActive) {
-        if (xSemaphoreTake(fingerprintMutex, portMAX_DELAY)) {
+    if (registrationActive)
+    {
+        if (xSemaphoreTake(fingerprintMutex, portMAX_DELAY))
+        {
             bool stepCompleted = false;
-            
-            switch (currentStep) {
-                case 0:// ID Assignment
-                    if (!idAssigned) {
-                        Serial.println("Step 0: Assigning Fingerprint ID");
-                        assignFingerprintID();
-                        if (idAssigned) {
-                            Serial.printf("ID assigned successfully: %d\n", fingerprintID);
-                            sendProgressUpdate(0, "Place your finger on the sensor");
-                            currentStep = 1;
-                            stepCompleted = true;
-                        }
-                    }
-                    break;
 
-                case 1:// First Scan
-                    if (firstScanMessage) {
-                        Serial.println("Step 1: Waiting for first fingerprint scan");
-                        firstScanMessage = false;
-                    }
-                    
-                    if (getFingerprintImage()) {
-                        firstScanMessage = true;  // Reset for next time
-                        Serial.println("First scan successful");
-                        sendProgressUpdate(1, "Remove finger and wait...");
-                        currentStep = 2;
-                        stepCompleted = true;
-                        delay(1000);
-                    }
-                    break;
-
-                case 2:// Second Scan
-                    if (secondScanMessage) {
-                        Serial.println("Step 2: Waiting for second fingerprint scan");
-                        secondScanMessage = false;
-                    }
-                    
-                    if (confirmSecondScan()) {
-                        secondScanMessage = true;  // Reset for next time
-                        Serial.println("Second scan successful");
-                        sendProgressUpdate(2, "Processing scans...");
-                        currentStep = 3;
+            switch (currentStep)
+            {
+            case 0:
+                if (!idAssigned)
+                {
+                    Serial.println("Step 0: Assigning Fingerprint ID");
+                    assignFingerprintID();
+                    if (idAssigned)
+                    {
+                        Serial.printf("ID assigned successfully: %d\n", fingerprintID);
+                        sendProgressUpdate(0, "Place your finger on the sensor");
+                        currentStep = 1;
                         stepCompleted = true;
                     }
-                    break;
+                }
+                break;
 
-                case 3:// Save Fingerprint
-                    Serial.println("Step 3: Saving fingerprint");
-                    if (saveFingerprint()) {
-                        Serial.println("Fingerprint saved successfully");
-                        sendProgressUpdate(3, "Registration complete!");
-                        fingerprintAdded = true;
-                        currentRegistration.registrationComplete = true;
-                        saveFingerprintAdded(true);
-                        registrationActive = false;
-                        stepCompleted = true;
-                    } else {
-                        Serial.println("Failed to save fingerprint");
-                        sendProgressUpdate(3, "Failed to save. Please try again.");
-                        resetRegistrationProcess();
-                    }
-                    break;
+            case 1:
+                if (firstScanMessage)
+                {
+                    Serial.println("Step 1: Waiting for first fingerprint scan");
+                    firstScanMessage = false;
+                }
 
-                default:
-                    Serial.printf("Invalid step encountered: %d\n", currentStep);
+                if (getFingerprintImage())
+                {
+                    firstScanMessage = true;
+                    Serial.println("First scan successful");
+                    sendProgressUpdate(1, "Remove finger and wait...");
+                    currentStep = 2;
+                    stepCompleted = true;
+                    delay(1000);
+                }
+                break;
+
+            case 2:
+                if (secondScanMessage)
+                {
+                    Serial.println("Step 2: Waiting for second fingerprint scan");
+                    secondScanMessage = false;
+                }
+
+                if (confirmSecondScan())
+                {
+                    secondScanMessage = true;
+                    Serial.println("Second scan successful");
+                    sendProgressUpdate(2, "Processing scans...");
+                    currentStep = 3;
+                    stepCompleted = true;
+                }
+                break;
+
+            case 3:
+                Serial.println("Step 3: Saving fingerprint");
+                if (saveFingerprint())
+                {
+                    Serial.println("Fingerprint saved successfully");
+                    sendProgressUpdate(3, "Registration complete!");
+                    fingerprintAdded = true;
+                    currentRegistration.registrationComplete = true;
+                    saveFingerprintAdded(true);
+                    registrationActive = false;
+                    stepCompleted = true;
+                }
+                else
+                {
+                    Serial.println("Failed to save fingerprint");
+                    sendProgressUpdate(3, "Failed to save. Please try again.");
                     resetRegistrationProcess();
-                    break;
+                }
+                break;
+
+            default:
+                Serial.printf("Invalid step encountered: %d\n", currentStep);
+                resetRegistrationProcess();
+                break;
             }
 
-            if (stepCompleted) {
+            if (stepCompleted)
+            {
                 Serial.printf("Completed step %d successfully\n", currentStep);
             }
 
             xSemaphoreGive(fingerprintMutex);
-            delay(100);  // Prevent tight loop
-        } else {
+            delay(100);
+        }
+        else
+        {
             Serial.println("Failed to acquire fingerprint mutex");
         }
     }
 
-    // Handle pending registration start
-    if (startRegistrationPending && !registrationActive) {
+    if (startRegistrationPending && !registrationActive)
+    {
         Serial.println("Starting registration from pending state");
         startFingerprintRegistration();
     }
 
-    // Send status updates to logged-in client
-    if (loggedInClientNum != -1) {
+    if (loggedInClientNum != -1)
+    {
         sendAllStatusesToClient(loggedInClientNum);
     }
 
-    // Print periodic status update
     static unsigned long lastStatus = 0;
-    if (currentMillis - lastStatus > 5000) {
+    if (currentMillis - lastStatus > 5000)
+    {
         Serial.printf("Connected WebSocket clients: %d\n", webSocket.connectedClients());
         lastStatus = currentMillis;
     }
